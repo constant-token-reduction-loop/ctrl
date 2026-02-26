@@ -1377,7 +1377,7 @@ async function main() {
   const priceGuardMode = (process.env.PRICE_GUARD_MODE ?? "auto").toLowerCase();
   const maxPriceDeviationPct = Number(process.env.MAX_PRICE_DEVIATION_PCT ?? "15");
   const quoteSolLamports = Number(process.env.PRICE_QUOTE_SOL_LAMPORTS ?? "100000000");
-  const buySplitMax = Number(process.env.BUY_SPLIT_MAX ?? "0");
+  const buySplitMax = Number(process.env.BUY_SPLIT_MAX ?? "30");
   const buySplitMinUsd = Number(process.env.BUY_SPLIT_MIN_USD ?? "0.20");
   const birdeyeApiKey = process.env.BIRDEYE_API_KEY ?? "";
   const jupiterApiKey = process.env.JUPITER_API_KEY ?? "";
