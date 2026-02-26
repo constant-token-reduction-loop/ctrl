@@ -612,6 +612,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
         const msg = String(event.message ?? "").trim();
         if (!msg) return false;
         if (/rpc|retrying|getsignaturesforaddress|gettokensupply|connectivity recovered/i.test(msg)) return false;
+        if (/worker stream disconnected|uncaught exception|unhandled rejection|eaddrinuse|listen eaddrinuse/i.test(msg)) return false;
         return true;
       })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())

@@ -64,7 +64,7 @@ startManaged("api", "npm", ["--prefix", "ctrl-burn-dashboard-main/ctrl-burn-dash
 if (shouldRunBurner) {
   startManaged("burner", "npm", ["--prefix", "autoburner", "run", "start"], {
     envOverrides: {
-      UI_PORT: process.env.UI_PORT ?? "8790",
+      UI_PORT: "8790",
       UI_ENABLE: process.env.UI_ENABLE ?? "1",
     },
     restartOnFail: true,

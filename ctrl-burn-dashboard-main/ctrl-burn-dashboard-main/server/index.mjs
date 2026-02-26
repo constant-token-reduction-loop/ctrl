@@ -129,6 +129,17 @@ function normalizeWorkerMessage(text) {
   return msg;
 }
 
+function isTerminalNoise(text) {
+  const t = String(text ?? "");
+  return (
+    /worker stream disconnected/i.test(t) ||
+    /uncaught exception/i.test(t) ||
+    /unhandled rejection/i.test(t) ||
+    /EADDRINUSE/i.test(t) ||
+    /listen EADDRINUSE/i.test(t)
+  );
+}
+
 function containsLegacyBrand(text) {
   return /\b(el\s*mencho|mencho)\b/i.test(String(text ?? ""));
 }
@@ -346,10 +357,34 @@ class CtrlRuntime {
     this.workerReconnectMs = 2000;
     this.workerAbortController = null;
     this.seenWorkerLogs = new Set();
+    this.seenBurnSignatures = new Set();
     this.lastWorkerStreamError = "";
     this.lastWorkerStreamErrorAt = 0;
+    this.workerStreamEverConnected = false;
     this.holdersLastSyncAt = 0;
     this.lastPersistSerialized = "";
+
+    if (this.state.ctrl?.lastBurn?.burnTx) {
+      this.seenBurnSignatures.add(this.state.ctrl.lastBurn.burnTx);
+    }
+  }
+
+  registerBurnConfirmation(signature, timestamp = nowIso()) {
+    const sig = String(signature ?? "").trim();
+    if (!sig) return false;
+    if (this.seenBurnSignatures.has(sig)) return false;
+    this.seenBurnSignatures.add(sig);
+    if (this.seenBurnSignatures.size > 2000) {
+      const first = this.seenBurnSignatures.values().next().value;
+      this.seenBurnSignatures.delete(first);
+    }
+
+    this.state.ctrl.lastBurn.burnTx = sig;
+    this.state.ctrl.lastBurn.solscanBurnUrl = formatTxUrl(sig);
+    this.state.ctrl.lastBurn.timestamp = timestamp;
+    this.state.ctrl.status = STATUS.CONFIRMED;
+    this.state.ctrl.cycles.total += 1;
+    return true;
   }
 
   start() {
@@ -486,6 +521,7 @@ class CtrlRuntime {
       if (!response.ok || !response.body) {
         throw new Error(`Worker events HTTP ${response.status}`);
       }
+      this.workerStreamEverConnected = true;
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
@@ -519,6 +555,10 @@ class CtrlRuntime {
       const reason = error instanceof Error ? error.message : "unknown";
       const msg = `\u274C ERROR: Worker stream disconnected (${reason})`;
       const now = Date.now();
+      const startupNoise =
+        !this.workerStreamEverConnected &&
+        /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN/i.test(reason);
+      if (startupNoise) return;
       const sameAsLast = this.lastWorkerStreamError === msg;
       const withinWindow = now - this.lastWorkerStreamErrorAt < 20000;
       if (!sameAsLast || !withinWindow) {
@@ -536,6 +576,7 @@ class CtrlRuntime {
   ingestWorkerLog(level, rawText) {
     const text = normalizeWorkerMessage(rawText);
     if (!text) return;
+    if (isTerminalNoise(text)) return;
     if (this.seenWorkerLogs.has(text)) return;
     this.seenWorkerLogs.add(text);
     if (this.seenWorkerLogs.size > 600) {
@@ -545,11 +586,7 @@ class CtrlRuntime {
 
     const sig = parseSignature(text);
     if (text.includes("Burn Tx") && sig) {
-      this.state.ctrl.lastBurn.burnTx = sig;
-      this.state.ctrl.lastBurn.solscanBurnUrl = formatTxUrl(sig);
-      this.state.ctrl.lastBurn.timestamp = nowIso();
-      this.state.ctrl.status = STATUS.CONFIRMED;
-      this.state.ctrl.cycles.total += 1;
+      this.registerBurnConfirmation(sig, nowIso());
     } else if ((text.includes("Pump Tx") || text.includes("Jupiter Tx")) && sig) {
       this.state.ctrl.lastBurn.buyTx = sig;
       this.state.ctrl.lastBurn.solscanBuyUrl = formatTxUrl(sig);
@@ -933,11 +970,8 @@ class CtrlRuntime {
 
     if (Array.isArray(signatures) && signatures.length) {
       const newestSig = signatures[0]?.signature ?? "";
-      if (newestSig && newestSig !== this.state.ctrl.lastBurn.burnTx) {
-        this.state.ctrl.lastBurn.burnTx = newestSig;
-        this.state.ctrl.lastBurn.solscanBurnUrl = formatTxUrl(newestSig);
-        this.state.ctrl.lastBurn.timestamp = signatures[0]?.blockTime ? signatures[0].blockTime * 1000 : nowIso();
-        this.state.ctrl.status = STATUS.CONFIRMED;
+      const burnTs = signatures[0]?.blockTime ? signatures[0].blockTime * 1000 : nowIso();
+      if (this.registerBurnConfirmation(newestSig, burnTs)) {
 
         this.pushTerminal({
           type: "confirm",
