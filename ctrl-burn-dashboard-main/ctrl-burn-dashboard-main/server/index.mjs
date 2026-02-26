@@ -200,7 +200,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
-  if (upper.includes("CLAIM")) {
+  if (upper.includes("CLAIM EXECUTED") || upper.includes("CLAIM LOCKED")) {
     const claimSol = parseClaimSol(text);
     const hasClaim = claimSol !== null && claimSol > 0;
     return {
@@ -211,7 +211,12 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
-  if (upper.includes("BUY") || upper.includes("JUPITER TX") || upper.includes("PUMP TX") || upper.includes("BOUGHT")) {
+  if (
+    upper.includes("BUY ROUTE LOCKED") ||
+    upper.includes("BUY INTENT CONFIRMED") ||
+    upper.includes("BOUGHT ") ||
+    upper.includes("BUY FILLED")
+  ) {
     const buySol = parseBuySol(text);
     const hasBuy = buySol !== null && buySol > 0;
     return {
@@ -221,7 +226,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
-  if (upper.includes("BURN TX") || upper.includes("CONFIRM")) {
+  if (upper.includes("BURN TX") || upper.includes("BURN CONFIRMED") || upper.includes("ON-CHAIN CONFIRMATION LOCKED")) {
     return {
       type: "confirm",
       message: `\u2705 [${CTRL_BRAND}] BURN CONFIRMED ON-CHAIN.`,
@@ -229,7 +234,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
-  if (upper.includes("BURN") || upper.includes("INCINERATOR")) {
+  if (upper.includes("BURNED ") || /BURN CONFIRMED\.\s*[\d,]+/i.test(raw)) {
     const burnedTokens = parseBurnTokens(text);
     const hasBurn = burnedTokens !== null && burnedTokens > 0;
     return {
@@ -252,23 +257,8 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     return null;
   }
 
-  // Pass through only concise useful info lines.
-  const compact = String(text)
-    .replace(/^\[[^\]]+\]\s*/g, "")
-    .replace(/^(INFO|OK|WARN|ERROR)\s+/i, "")
-    .trim();
-  if (compact && /(CYCLE #|WAIT 69|BURN|BUY|CLAIM|CONFIRM)/i.test(compact)) {
-    return {
-      type: level === "err" ? "error" : "info",
-      message: compact,
-      txUrl: signature ? formatTxUrl(signature) : undefined,
-    };
-  }
-
-  return {
-    type: "info",
-    message: "",
-  };
+  // Suppress everything else to keep terminal clean and deterministic.
+  return null;
 }
 
 function sanitizedMessageByType(type) {
@@ -811,7 +801,10 @@ class CtrlRuntime {
   }
 
   pushTerminal(event) {
-    const base = { timestamp: nowIso(), ...event };
+    const nowMs = Date.now();
+    const nextMs = nowMs <= this.lastTerminalAt ? this.lastTerminalAt + 1 : nowMs;
+    this.lastTerminalAt = nextMs;
+    const base = { timestamp: new Date(nextMs).toISOString(), ...event };
     const e = {
       ...base,
       message: containsLegacyBrand(base.message) ? sanitizedMessageByType(base.type) : base.message,
