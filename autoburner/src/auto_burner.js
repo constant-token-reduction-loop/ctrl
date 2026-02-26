@@ -698,60 +698,93 @@ async function burnAllTokens({
     }
   }
 
-  // Burn target mint only (after conversions, if any).
-  const targetProgramId = await getTokenProgramId(rpcPool, mint);
-  const targetAta = await getAssociatedTokenAddress(mint, payer.publicKey, false, targetProgramId);
-  let targetAccount;
-  try {
-    targetAccount = await rpcPool.withRetry(
-      (conn) => getAccount(conn, targetAta, "confirmed", targetProgramId),
-      "getAccount"
+  // Burn target mint only (after conversions, if any), using jsonParsed account reads.
+  const readTargetAccounts = async (programId) => {
+    const rows = await rpcPool.withRetry(
+      (conn) =>
+        conn.getTokenAccountsByOwner(
+          payer.publicKey,
+          { mint: mint.toBase58() },
+          { encoding: "jsonParsed", commitment: "confirmed" }
+        ),
+      "getTokenAccountsByOwnerByMint"
     );
+    const list = Array.isArray(rows?.value) ? rows.value : [];
+    return list
+      .map((row) => {
+        const parsed = row?.account?.data?.parsed?.info;
+        const amountRaw = String(parsed?.tokenAmount?.amount ?? "0");
+        const decimals = Number(parsed?.tokenAmount?.decimals ?? 0);
+        let amount;
+        try {
+          amount = BigInt(amountRaw);
+        } catch {
+          amount = 0n;
+        }
+        if (amount <= 0n) return null;
+        return {
+          tokenAccount: new PublicKey(String(row.pubkey)),
+          amount,
+          decimals,
+          programId,
+        };
+      })
+      .filter(Boolean);
+  };
+
+  let targetAccounts = [];
+  try {
+    targetAccounts = [
+      ...(await readTargetAccounts(TOKEN_PROGRAM_ID)),
+      ...(await readTargetAccounts(TOKEN_2022_PROGRAM_ID)),
+    ];
   } catch (err) {
     if (isRpcBlockedError(err)) {
       log.warn("Target burn account query blocked by RPC. Skipping burn this cycle.");
       return null;
     }
-    log.info("No target token account to burn.");
-    return null;
+    throw err;
   }
 
-  if (targetAccount.amount === 0n) {
+  if (!targetAccounts.length) {
     log.info("Target token balance is zero; nothing to burn.");
     return null;
   }
 
-  const targetMintInfo = await getMintInfo(rpcPool, mint, targetProgramId);
-  const ix = createBurnCheckedInstruction(
-    targetAta,
-    mint,
-    payer.publicKey,
-    targetAccount.amount,
-    targetMintInfo.decimals,
-    [],
-    targetProgramId
-  );
-  const latest = await rpcPool.withRetry(
-    (conn) => conn.getLatestBlockhash("confirmed"),
-    "getLatestBlockhash"
-  );
-  const tx = new Transaction().add(ix);
-  tx.feePayer = payer.publicKey;
-  tx.recentBlockhash = latest.blockhash;
-  const sig = await rpcPool.withRetry(
-    (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
-    "sendTransaction"
-  );
-  await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
-  totalBurnedTarget = Number(targetAccount.amount) / 10 ** targetMintInfo.decimals;
+  for (const acc of targetAccounts) {
+    const ix = createBurnCheckedInstruction(
+      acc.tokenAccount,
+      mint,
+      payer.publicKey,
+      acc.amount,
+      acc.decimals,
+      [],
+      acc.programId
+    );
+    const latest = await rpcPool.withRetry(
+      (conn) => conn.getLatestBlockhash("confirmed"),
+      "getLatestBlockhash"
+    );
+    const tx = new Transaction().add(ix);
+    tx.feePayer = payer.publicKey;
+    tx.recentBlockhash = latest.blockhash;
+    const sig = await rpcPool.withRetry(
+      (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
+      "sendTransaction"
+    );
+    await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
+    const burned = Number(acc.amount) / 10 ** acc.decimals;
+    totalBurnedTarget += burned;
+    lastSig = sig;
+    log.tx("Burn Tx", sig);
+  }
+
   log.burn(`Burned ${totalBurnedTarget.toLocaleString()} tokens.`);
   if (pricing?.tokenUsd && pricing?.solUsd) {
     const burnedUsd = totalBurnedTarget * pricing.tokenUsd;
     const burnedSol = burnedUsd / pricing.solUsd;
     log.burn(`Burn value: ${formatSol(burnedSol)} (${formatUsd(burnedUsd)}).`);
   }
-  log.tx("Burn Tx", sig);
-  lastSig = sig;
 
   /*
   for (const c of candidates) {

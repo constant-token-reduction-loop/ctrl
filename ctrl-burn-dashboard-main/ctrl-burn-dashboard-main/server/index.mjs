@@ -339,7 +339,7 @@ function createDefaultState() {
       tokensBurned: { total: toNumber(process.env.CTRL_TOTAL_TOKENS_BURNED, 0) },
       solBurned: { total: toNumber(process.env.CTRL_TOTAL_SOL_BURNED, 0) },
       usdSpent: { total: toNumber(process.env.CTRL_TOTAL_USD_SPENT, 0) },
-      cycles: { total: toNumber(process.env.CTRL_TOTAL_CYCLES, 0) },
+      cycles: { total: Math.max(69, toNumber(process.env.CTRL_TOTAL_CYCLES, 69)) },
       avgBurnPerCycle: toNumber(process.env.CTRL_AVG_BURN_PER_CYCLE, 0),
       nextBurn: { remainingSeconds: CYCLE_SECONDS, progress01: 0 },
       status: STATUS.WAITING,
