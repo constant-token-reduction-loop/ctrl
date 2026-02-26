@@ -1195,7 +1195,15 @@ async function runOnce(config) {
 
   // Burn any existing tokens before attempting a buy
   try {
-    await burnAllTokens({ rpcPool, payer: keypair, mint, burnAnyToken });
+    await burnAllTokens({
+      rpcPool,
+      payer: keypair,
+      mint,
+      burnAnyToken,
+      jupiterApiKey,
+      slippagePct: slippage,
+      priorityFeeLamports: parseSolToLamports(String(priorityFee)),
+    });
   } catch (err) {
     log.err(`Burn (pre-buy) failed: ${err.message}`);
   }
@@ -1475,6 +1483,9 @@ async function runOnce(config) {
             mint,
             pricing: { tokenUsd, solUsd },
             burnAnyToken,
+            jupiterApiKey,
+            slippagePct: slippage,
+            priorityFeeLamports: parseSolToLamports(String(priorityFee)),
           });
           if (burnResult?.burnedTokens !== undefined) {
             uiState.burned = `${burnResult.burnedTokens.toLocaleString()} tokens`;
@@ -1516,6 +1527,9 @@ async function runOnce(config) {
       mint,
       pricing: { tokenUsd, solUsd },
       burnAnyToken,
+      jupiterApiKey,
+      slippagePct: slippage,
+      priorityFeeLamports: parseSolToLamports(String(priorityFee)),
     });
     if (burnResult?.burnedTokens !== undefined && burnResult.burnedTokens > 0) {
       uiState.burned = `${burnResult.burnedTokens.toLocaleString()} tokens`;

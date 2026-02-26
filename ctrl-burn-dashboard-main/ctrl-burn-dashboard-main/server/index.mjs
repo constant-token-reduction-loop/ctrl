@@ -231,6 +231,22 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
+  if (upper.includes("DEPOSIT DETECTED")) {
+    return {
+      type: "info",
+      message: `\u{1F7E3} [${CTRL_BRAND}] ${raw.replace(/^\[[^\]]+\]\s*/g, "")}`,
+      txUrl: signature ? formatTxUrl(signature) : undefined,
+    };
+  }
+
+  if (upper.includes("DEPOSIT CONVERTED TO TARGET")) {
+    return {
+      type: "buy",
+      message: `\u{1F7E1} [${CTRL_BRAND}] ${raw.replace(/^\[[^\]]+\]\s*/g, "")}`,
+      txUrl: signature ? formatTxUrl(signature) : undefined,
+    };
+  }
+
   if (
     upper.includes("BUY ROUTE LOCKED") ||
     upper.includes("BUY INTENT CONFIRMED") ||
