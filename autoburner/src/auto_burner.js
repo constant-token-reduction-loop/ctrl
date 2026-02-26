@@ -42,7 +42,8 @@ function requireEnv(name) {
 }
 
 function parseSecretKey(secretRaw) {
-  let secret = String(secretRaw ?? "").trim();
+  const jsonOverride = String(process.env.WALLET_SECRET_KEY_JSON ?? "").trim();
+  let secret = String(jsonOverride || secretRaw || "").trim();
   if (!secret) throw new Error("Wallet secret is empty");
   const forcedFormat = String(process.env.WALLET_SECRET_KEY_FORMAT ?? "").trim().toLowerCase();
 
@@ -76,7 +77,8 @@ function parseSecretKey(secretRaw) {
       }
     }
     if (!Array.isArray(arr) || arr.length !== 64) {
-      throw new Error("Wallet secret array must contain exactly 64 numbers");
+      const got = Array.isArray(arr) ? arr.length : 0;
+      throw new Error(`Wallet secret array must contain exactly 64 numbers (got ${got})`);
     }
     if (!arr.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
       throw new Error("Wallet secret array must contain bytes (0-255)");
