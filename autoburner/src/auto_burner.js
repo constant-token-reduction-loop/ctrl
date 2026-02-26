@@ -42,16 +42,30 @@ function requireEnv(name) {
 }
 
 function parseSecretKey(secretRaw) {
-  const secret = String(secretRaw ?? "").trim();
+  let secret = String(secretRaw ?? "").trim();
   if (!secret) throw new Error("Wallet secret is empty");
   const forcedFormat = String(process.env.WALLET_SECRET_KEY_FORMAT ?? "").trim().toLowerCase();
+
+  // Railway/UI env editors sometimes wrap JSON values in quotes.
+  if (
+    (secret.startsWith('"') && secret.endsWith('"')) ||
+    (secret.startsWith("'") && secret.endsWith("'"))
+  ) {
+    secret = secret.slice(1, -1).trim();
+  }
 
   if (forcedFormat === "json" || secret.startsWith("[")) {
     let arr;
     try {
       arr = JSON.parse(secret);
     } catch {
-      throw new Error("Invalid wallet secret array JSON format");
+      try {
+        // Fallback for double-encoded JSON strings.
+        const once = JSON.parse(`"${secret.replace(/"/g, '\\"')}"`);
+        arr = JSON.parse(String(once));
+      } catch {
+        throw new Error("Invalid wallet secret array JSON format");
+      }
     }
     if (!Array.isArray(arr) || arr.length !== 64) {
       throw new Error("Wallet secret array must contain exactly 64 numbers");
