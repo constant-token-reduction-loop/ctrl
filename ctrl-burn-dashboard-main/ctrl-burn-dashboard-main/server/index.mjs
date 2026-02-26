@@ -175,8 +175,22 @@ function containsLegacyBrand(text) {
 }
 
 function buildProfessionalTerminalMessage(level, text, signature) {
-  const upper = text.toUpperCase();
+  const raw = String(text ?? "").trim();
+  const upper = raw.toUpperCase();
   const amount = parseLeadingNumber(text);
+
+  // Suppress runtime/setup/noise lines from terminal feed.
+  if (
+    /CTRL RUNTIME INITIALIZED|^WALLET:|^MINT:|^RPCS:|^INTERVAL:|^BUY ROUTE:/i.test(raw) ||
+    /UI SERVER RUNNING ON HTTP/i.test(raw) ||
+    /CTRL CYCLE START/i.test(raw) ||
+    /:: CTRL CYCLE/i.test(raw) ||
+    /PRICE SIGNALS|^📊 PRICE /i.test(raw) ||
+    /TOKENS REMAINING \(SUPPLY\)/i.test(raw) ||
+    /CLAIMED CREATOR FEES/i.test(raw)
+  ) {
+    return null;
+  }
 
   if (level === "err" || upper.includes("ERROR") || upper.includes("FAILED")) {
     return {
@@ -238,12 +252,12 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     return null;
   }
 
-  // Pass through useful live logs instead of collapsing into the same generic line.
+  // Pass through only concise useful info lines.
   const compact = String(text)
     .replace(/^\[[^\]]+\]\s*/g, "")
     .replace(/^(INFO|OK|WARN|ERROR)\s+/i, "")
     .trim();
-  if (compact) {
+  if (compact && /(CYCLE #|WAIT 69|BURN|BUY|CLAIM|CONFIRM)/i.test(compact)) {
     return {
       type: level === "err" ? "error" : "info",
       message: compact,

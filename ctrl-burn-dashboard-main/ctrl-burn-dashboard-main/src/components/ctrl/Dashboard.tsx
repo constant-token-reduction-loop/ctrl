@@ -520,6 +520,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   });
 
   const [topSparkles, setTopSparkles] = useState<Sparkle[]>([]);
+  const hasLiveWorkerEvents = data.terminal.events.length > 0;
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -607,13 +608,17 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
 
   const combinedEventsChronological = useMemo(() => {
     const source = data.terminal.events.length > 0 ? data.terminal.events : mockTerminalEvents;
+    const liveCutoffMs = Date.now() - 20 * 60 * 1000;
     const filtered = [...source]
       .filter((event) => {
         const msg = String(event.message ?? "").trim();
         if (!msg) return false;
+        const ts = new Date(event.timestamp).getTime();
+        if (data.terminal.events.length > 0 && Number.isFinite(ts) && ts < liveCutoffMs) return false;
         if (/rpc|retrying|getsignaturesforaddress|gettokensupply|connectivity recovered/i.test(msg)) return false;
         if (/worker stream disconnected|uncaught exception|unhandled rejection|eaddrinuse|listen eaddrinuse/i.test(msg)) return false;
         if (/system update:\s*runtime health nominal/i.test(msg)) return false;
+        if (/ui server running on http|:: ctrl cycle|^ctrl cycle start\.?$/i.test(msg)) return false;
         return true;
       })
       .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -632,6 +637,20 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   const terminalEvents = useMemo(() => [...combinedEventsChronological].reverse(), [combinedEventsChronological]);
 
   useEffect(() => {
+    if (hasLiveWorkerEvents) {
+      // Live mode: render complete lines immediately to avoid partial stacked rows.
+      const full: Record<string, number> = {};
+      combinedEventsChronological.forEach((event) => {
+        const id = eventId(event);
+        full[id] = event.message.length;
+      });
+      setTypedLengths(full);
+      typingQueueRef.current = [];
+      activeTypingRef.current = null;
+      initialTypingLoadRef.current = true;
+      return;
+    }
+
     const nextTextById: Record<string, string> = {};
     combinedEventsChronological.forEach((event) => {
       nextTextById[eventId(event)] = event.message;
@@ -674,9 +693,10 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
 
       return next;
     });
-  }, [combinedEventsChronological]);
+  }, [combinedEventsChronological, hasLiveWorkerEvents]);
 
   useEffect(() => {
+    if (hasLiveWorkerEvents) return;
     let timer: number | null = null;
 
     const scheduleNext = () => {
@@ -752,7 +772,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       if (timer !== null) window.clearTimeout(timer);
       if (clearKeyTimerRef.current !== null) window.clearTimeout(clearKeyTimerRef.current);
     };
-  }, []);
+  }, [hasLiveWorkerEvents]);
 
   const incomingBurns = useMemo(() => {
     const fromChartDevBuys: TopBurn[] = topBurnEvents
@@ -863,11 +883,9 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
             {terminalEvents.map((event) => {
               const id = eventId(event);
               const baseMessage = event.message.replace(/\s*\[VIEW ON SOLSCAN\]/i, "");
-              const maxLength = Math.min(typedLengths[id] ?? baseMessage.length, baseMessage.length);
-              const typedMessage = baseMessage.slice(0, maxLength);
-              if (maxLength === 0) return null;
+              const typedMessage = baseMessage;
               const hasTx = Boolean(event.txUrl);
-              const showTx = hasTx && maxLength >= baseMessage.length;
+              const showTx = hasTx;
 
               return (
                 <div key={id} className="relative min-h-[42px] rounded-sm border border-border/60 bg-background/35 px-2 py-0.5">
