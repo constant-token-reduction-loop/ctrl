@@ -339,6 +339,18 @@ async function rpcRequest(rpcPool, method, params) {
   throw lastErr;
 }
 
+async function rpcGetParsedTokenAccountsByOwner(rpcPool, ownerPubkey, filter) {
+  const owner =
+    typeof ownerPubkey === "string" ? ownerPubkey : ownerPubkey?.toBase58?.() ?? String(ownerPubkey);
+  const result = await rpcRequest(rpcPool, "getTokenAccountsByOwner", [
+    owner,
+    filter,
+    { encoding: "jsonParsed", commitment: "confirmed" },
+  ]);
+  const value = Array.isArray(result?.value) ? result.value : [];
+  return { value };
+}
+
 async function claimTxHadNoRewards(rpcPool, signature) {
   try {
     const tx = await rpcRequest(rpcPool, "getTransaction", [
@@ -605,15 +617,9 @@ async function burnAllTokens({
   const targetMint = mint?.toBase58?.() ?? "";
 
   const collectByProgram = async (programId) => {
-    const rows = await rpcPool.withRetry(
-      (conn) =>
-        conn.getTokenAccountsByOwner(
-          payer.publicKey,
-          { programId },
-          { encoding: "jsonParsed", commitment: "confirmed" }
-        ),
-      "getTokenAccountsByOwner"
-    );
+    const rows = await rpcGetParsedTokenAccountsByOwner(rpcPool, payer.publicKey, {
+      programId: programId.toBase58(),
+    });
     const list = Array.isArray(rows?.value) ? rows.value : [];
     return list
       .map((row) => {
@@ -632,13 +638,18 @@ async function burnAllTokens({
         if (amount <= 0n) return null;
         if (!burnAnyToken && mintAddr !== targetMint) return null;
         if (mintAddr === SOL_MINT) return null;
+        const accountOwnerProgram = String(row?.account?.owner ?? "");
+        const burnProgramId =
+          accountOwnerProgram === TOKEN_2022_PROGRAM_ID.toBase58()
+            ? TOKEN_2022_PROGRAM_ID
+            : TOKEN_PROGRAM_ID;
         return {
           tokenAccount: new PublicKey(String(row.pubkey)),
           mint: new PublicKey(mintAddr),
           mintStr: mintAddr,
           amount,
           decimals,
-          programId,
+          programId: burnProgramId,
         };
       })
       .filter(Boolean);
@@ -656,7 +667,7 @@ async function burnAllTokens({
         state.tokenScanBlocked = true;
         log.warn("Token account scan endpoint blocked by RPC. Disabling auto-scan and continuing.");
       } else {
-        throw err;
+        log.warn(`Token account scan skipped: ${err?.message ?? String(err)}`);
       }
     }
   }
@@ -693,76 +704,90 @@ async function burnAllTokens({
     }
   }
 
-  // Burn target mint only (after conversions, if any), via deterministic ATA lookup.
-  let targetProgramId;
-  try {
-    targetProgramId = await getTokenProgramId(rpcPool, mint);
-  } catch (err) {
-    if (isRpcBlockedError(err)) {
-      log.warn("Mint program lookup blocked by RPC. Skipping burn this cycle.");
-      return null;
-    }
-    throw err;
-  }
+  // Burn target mint only (after conversions, if any), across all owner token accounts for this mint.
+  const readTargetAccountsByMint = async () => {
+    const rows = await rpcGetParsedTokenAccountsByOwner(rpcPool, payer.publicKey, {
+      mint: mint.toBase58(),
+    });
+    const list = Array.isArray(rows?.value) ? rows.value : [];
+    return list
+      .map((row) => {
+        const parsed = row?.account?.data?.parsed?.info;
+        const amountRaw = String(parsed?.tokenAmount?.amount ?? "0");
+        const decimals = Number(parsed?.tokenAmount?.decimals ?? 0);
+        let amount;
+        try {
+          amount = BigInt(amountRaw);
+        } catch {
+          amount = 0n;
+        }
+        if (amount <= 0n) return null;
+        const accountOwnerProgram = String(row?.account?.owner ?? "");
+        const burnProgramId =
+          accountOwnerProgram === TOKEN_2022_PROGRAM_ID.toBase58()
+            ? TOKEN_2022_PROGRAM_ID
+            : TOKEN_PROGRAM_ID;
+        return {
+          tokenAccount: new PublicKey(String(row.pubkey)),
+          amount,
+          decimals,
+          programId: burnProgramId,
+        };
+      })
+      .filter(Boolean);
+  };
 
-  const targetAta = await getAssociatedTokenAddress(
-    mint,
-    payer.publicKey,
-    false,
-    targetProgramId
-  );
-
-  let targetAmount = 0n;
-  let targetDecimals = 0;
+  let targetAccounts = [];
   try {
-    const bal = await rpcPool.withRetry(
-      (conn) => conn.getTokenAccountBalance(targetAta, "confirmed"),
-      "getTokenAccountBalance"
-    );
-    const amountRaw = String(bal?.value?.amount ?? "0");
-    targetDecimals = Number(bal?.value?.decimals ?? 0);
-    targetAmount = BigInt(amountRaw);
+    targetAccounts = await readTargetAccountsByMint();
   } catch (err) {
     if (isRpcBlockedError(err)) {
       log.warn("Target token balance query blocked by RPC. Skipping burn this cycle.");
       return null;
     }
-    log.info("Target token account missing; nothing to burn.");
+    log.warn(`Target token query skipped: ${err?.message ?? String(err)}`);
     return null;
   }
 
-  if (targetAmount <= 0n) {
+  if (!targetAccounts.length) {
     log.info("Target token balance is zero; nothing to burn.");
     return null;
   }
 
-  try {
-    const ix = createBurnCheckedInstruction(
-      targetAta,
-      mint,
-      payer.publicKey,
-      targetAmount,
-      targetDecimals,
-      [],
-      targetProgramId
-    );
-    const latest = await rpcPool.withRetry(
-      (conn) => conn.getLatestBlockhash("confirmed"),
-      "getLatestBlockhash"
-    );
-    const tx = new Transaction().add(ix);
-    tx.feePayer = payer.publicKey;
-    tx.recentBlockhash = latest.blockhash;
-    const sig = await rpcPool.withRetry(
-      (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
-      "sendTransaction"
-    );
-    await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
-    totalBurnedTarget = Number(targetAmount) / 10 ** targetDecimals;
-    lastSig = sig;
-    log.tx("Burn Tx", sig);
-  } catch (err) {
-    log.warn(`Target burn step skipped: ${err?.message ?? String(err)}`);
+  for (const acc of targetAccounts) {
+    try {
+      const ix = createBurnCheckedInstruction(
+        acc.tokenAccount,
+        mint,
+        payer.publicKey,
+        acc.amount,
+        acc.decimals,
+        [],
+        acc.programId
+      );
+      const latest = await rpcPool.withRetry(
+        (conn) => conn.getLatestBlockhash("confirmed"),
+        "getLatestBlockhash"
+      );
+      const tx = new Transaction().add(ix);
+      tx.feePayer = payer.publicKey;
+      tx.recentBlockhash = latest.blockhash;
+      const sig = await rpcPool.withRetry(
+        (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
+        "sendTransaction"
+      );
+      await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
+      const burned = Number(acc.amount) / 10 ** acc.decimals;
+      totalBurnedTarget += burned;
+      lastSig = sig;
+      log.tx("Burn Tx", sig);
+    } catch (err) {
+      log.warn(`Target burn account step skipped: ${err?.message ?? String(err)}`);
+    }
+  }
+
+  if (totalBurnedTarget <= 0) {
+    log.info("Target token balance is zero; nothing to burn.");
     return null;
   }
 
