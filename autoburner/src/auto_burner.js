@@ -1321,7 +1321,7 @@ async function main() {
   const buyRoute = (process.env.BUY_ROUTE ?? "auto").toLowerCase();
   const intervalMs = Number(process.env.INTERVAL_MS ?? "180000");
   const uiEnable = (process.env.UI_ENABLE ?? "1") !== "0";
-  const uiPort = Number(process.env.UI_PORT ?? "8787");
+  const uiPort = Number(process.env.UI_PORT ?? "8790");
   const minSolKeep = parseSolToLamports(process.env.MIN_SOL_KEEP ?? "0");
   const buyFeeBuffer = parseSolToLamports(process.env.BUY_SOL_FEE_BUFFER ?? "0");
   const minSolRequired = parseSolToLamports(process.env.MIN_SOL_REQUIRED ?? "0");

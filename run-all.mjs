@@ -44,18 +44,28 @@ function startManaged(name, command, args, options = {}) {
 
 const runBurnerMode = String(process.env.CTRL_RUN_BURNER ?? "auto").toLowerCase();
 const shouldRunBurner = !(runBurnerMode === "0" || runBurnerMode === "false" || runBurnerMode === "no");
+const workerBase = String(process.env.CTRL_WORKER_BASE_URL ?? "http://127.0.0.1:8790").trim();
+const workerEventsUrl = process.env.CTRL_WORKER_EVENTS_URL ?? `${workerBase}/events`;
+const workerStatusUrl = process.env.CTRL_WORKER_STATUS_URL ?? `${workerBase}/status`;
 
 startManaged("ui", "npm", ["--prefix", "ctrl-burn-dashboard-main/ctrl-burn-dashboard-main", "run", "prod:ui"], {
   restartOnFail: true,
   restartDelayMs: 4000,
 });
 startManaged("api", "npm", ["--prefix", "ctrl-burn-dashboard-main/ctrl-burn-dashboard-main", "run", "prod:api"], {
+  envOverrides: {
+    CTRL_WORKER_EVENTS_URL: workerEventsUrl,
+    CTRL_WORKER_STATUS_URL: workerStatusUrl,
+  },
   restartOnFail: true,
   restartDelayMs: 4000,
 });
 
 if (shouldRunBurner) {
   startManaged("burner", "npm", ["--prefix", "autoburner", "run", "start"], {
+    envOverrides: {
+      UI_PORT: process.env.UI_PORT ?? "8790",
+    },
     restartOnFail: true,
     restartDelayMs: 8000,
   });
