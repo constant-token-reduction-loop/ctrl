@@ -6,10 +6,11 @@
     "postinstall": "npm run bootstrap && npm run build",
     "bootstrap": "npm --prefix ctrl-burn-dashboard-main/ctrl-burn-dashboard-main install && npm --prefix autoburner install",
     "build": "npm --prefix ctrl-burn-dashboard-main/ctrl-burn-dashboard-main run build",
-    "start": "dotenv -e .env -- concurrently -k \"npm --prefix ctrl-burn-dashboard-main/ctrl-burn-dashboard-main run prod:ui\" \"npm --prefix ctrl-burn-dashboard-main/ctrl-burn-dashboard-main run prod:api\" \"npm --prefix autoburner run start\""
+    "start": "node run-all.mjs"
   },
   "dependencies": {
     "concurrently": "^9.2.1",
+    "dotenv": "^16.6.1",
     "dotenv-cli": "^7.4.2"
   }
 }
