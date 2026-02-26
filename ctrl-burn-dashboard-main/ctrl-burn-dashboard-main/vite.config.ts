@@ -30,6 +30,7 @@ export default defineConfig(({ mode }) => ({
     host: "::",
     port: APP_PORT,
     strictPort: true,
+    allowedHosts: ["ctrl.observer", ".railway.app"],
     proxy: {
       "/api": {
         target: process.env.CTRL_BACKEND_URL ?? "http://localhost:8787",
