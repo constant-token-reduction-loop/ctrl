@@ -223,6 +223,14 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
+  if (upper.includes("NO REWARDS TO CLAIM")) {
+    return {
+      type: "reward",
+      message: `\u{1F7E2} [${CTRL_BRAND}] NO REWARDS TO CLAIM.`,
+      txUrl: signature ? formatTxUrl(signature) : undefined,
+    };
+  }
+
   if (
     upper.includes("BUY ROUTE LOCKED") ||
     upper.includes("BUY INTENT CONFIRMED") ||

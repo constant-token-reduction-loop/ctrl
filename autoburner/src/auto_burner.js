@@ -980,6 +980,7 @@ async function runOnce(config) {
     }
   }
   if (claimed <= 0n) {
+    log.info(`CYCLE #${cycleId} NO REWARDS TO CLAIM.`);
     state.claimCooldown = claimCooldownCycles;
   } else {
     state.claimCooldown = 0;
@@ -1099,12 +1100,12 @@ async function runOnce(config) {
   if (solUsd !== null) {
     const claimedUsd = claimedSol * solUsd;
     log.info(`Claimed rewards: ${formatSol(claimedSol)} (${formatUsd(claimedUsd)})`);
-    log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(2)} SOL (${claimedUsd.toFixed(2)} USD).`);
+    log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(6)} SOL (${claimedUsd.toFixed(2)} USD).`);
     uiState.claimed = `${formatSol(claimedSol)} (${formatUsd(claimedUsd)})`;
     uiState.solUsd = `SOL: ${formatUsd(solUsd)}`;
   } else {
     log.info(`Claimed rewards: ${formatSol(claimedSol)} (USD n/a)`);
-    log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(2)} SOL (USD N/A).`);
+    log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(6)} SOL (USD N/A).`);
     uiState.claimed = `${formatSol(claimedSol)} (USD n/a)`;
   }
   if (tokenUsd !== null) {
