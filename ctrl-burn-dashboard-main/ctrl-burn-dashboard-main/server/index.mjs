@@ -346,6 +346,8 @@ class CtrlRuntime {
     this.workerReconnectMs = 2000;
     this.workerAbortController = null;
     this.seenWorkerLogs = new Set();
+    this.lastWorkerStreamError = "";
+    this.lastWorkerStreamErrorAt = 0;
     this.holdersLastSyncAt = 0;
     this.lastPersistSerialized = "";
   }
@@ -514,10 +516,16 @@ class CtrlRuntime {
       this.recordHeartbeat(false);
       this.state.ctrl.status = STATUS.ERROR;
       this.broadcastPatch({ ctrl: { status: STATUS.ERROR, uptime: this.state.ctrl.uptime } });
-      this.pushTerminal({
-        type: "error",
-        message: `\u274C ERROR: Worker stream disconnected (${error instanceof Error ? error.message : "unknown"})`,
-      });
+      const reason = error instanceof Error ? error.message : "unknown";
+      const msg = `\u274C ERROR: Worker stream disconnected (${reason})`;
+      const now = Date.now();
+      const sameAsLast = this.lastWorkerStreamError === msg;
+      const withinWindow = now - this.lastWorkerStreamErrorAt < 20000;
+      if (!sameAsLast || !withinWindow) {
+        this.pushTerminal({ type: "error", message: msg });
+        this.lastWorkerStreamError = msg;
+        this.lastWorkerStreamErrorAt = now;
+      }
     } finally {
       setTimeout(() => {
         this.connectWorkerEvents().catch(() => undefined);
