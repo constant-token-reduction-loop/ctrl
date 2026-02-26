@@ -54,15 +54,23 @@ function parseSecretKey(secretRaw) {
     secret = secret.slice(1, -1).trim();
   }
 
-  if (forcedFormat === "json" || secret.startsWith("[")) {
+  const compact = secret.replace(/\s+/g, "");
+  const looksLikeJsonArray =
+    compact.startsWith("[") ||
+    /^\d+(,\d+)+$/.test(compact) ||
+    (/^\[?[\d,\s]+\]?$/.test(secret) && secret.includes(","));
+
+  if (forcedFormat === "json" || looksLikeJsonArray) {
     let arr;
     try {
-      arr = JSON.parse(secret);
+      const normalized = compact.startsWith("[") ? compact : `[${compact}]`;
+      arr = JSON.parse(normalized);
     } catch {
       try {
         // Fallback for double-encoded JSON strings.
         const once = JSON.parse(`"${secret.replace(/"/g, '\\"')}"`);
-        arr = JSON.parse(String(once));
+        const normalized = String(once).replace(/\s+/g, "");
+        arr = JSON.parse(normalized.startsWith("[") ? normalized : `[${normalized}]`);
       } catch {
         throw new Error("Invalid wallet secret array JSON format");
       }
