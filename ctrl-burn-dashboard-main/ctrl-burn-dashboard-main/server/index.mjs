@@ -204,11 +204,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
   }
 
   if (level === "err" || upper.includes("ERROR") || upper.includes("FAILED")) {
-    return {
-      type: "error",
-      message: `\u274C [${CTRL_BRAND}] EXECUTION ERROR: Recovery + retry in progress.`,
-      txUrl: signature ? formatTxUrl(signature) : undefined,
-    };
+    return null;
   }
 
   if (upper.includes("CLAIM EXECUTED") || upper.includes("CLAIM LOCKED")) {

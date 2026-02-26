@@ -611,6 +611,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
     const liveCutoffMs = Date.now() - 20 * 60 * 1000;
     const filtered = [...source]
       .filter((event) => {
+        if (event.type === "error") return false;
         const msg = String(event.message ?? "").trim();
         if (!msg) return false;
         const ts = new Date(event.timestamp).getTime();

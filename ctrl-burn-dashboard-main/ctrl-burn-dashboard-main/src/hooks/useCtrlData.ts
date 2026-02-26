@@ -174,6 +174,7 @@ export function useCtrlData() {
             ...prev,
             terminal: (() => {
               const incoming = parsed.payload;
+              if (incoming?.type === "error") return prev.terminal;
               const msg = String(incoming?.message ?? "").trim();
               if (!msg) return prev.terminal;
 
