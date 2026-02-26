@@ -110,6 +110,36 @@ function parseLeadingNumber(text) {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseNumberToken(raw) {
+  const n = Number(String(raw ?? "").replaceAll(",", ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseClaimSol(text) {
+  const s = String(text);
+  const plusMatch = s.match(/\+\s*([\d.,]+)\s*SOL/i);
+  if (plusMatch) return parseNumberToken(plusMatch[1]);
+  const claimMatch = s.match(/claimed\s*([\d.,]+)\s*(?:\)|SOL)?/i);
+  if (claimMatch) return parseNumberToken(claimMatch[1]);
+  return null;
+}
+
+function parseBuySol(text) {
+  const s = String(text);
+  const deployMatch = s.match(/deploying\s*([\d.,]+)\s*SOL/i);
+  if (deployMatch) return parseNumberToken(deployMatch[1]);
+  const boughtMatch = s.match(/bought\s*([\d.,]+)\s*SOL/i);
+  if (boughtMatch) return parseNumberToken(boughtMatch[1]);
+  return null;
+}
+
+function parseBurnTokens(text) {
+  const s = String(text);
+  const burnedMatch = s.match(/burned\s*([\d.,]+)\s*tokens?/i);
+  if (burnedMatch) return parseNumberToken(burnedMatch[1]);
+  return null;
+}
+
 function normalizeWorkerMessage(text) {
   let msg = String(text ?? "")
     .replace(/^\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|A\.M\.|P\.M\.)?\s*/i, "")
@@ -147,7 +177,6 @@ function containsLegacyBrand(text) {
 function buildProfessionalTerminalMessage(level, text, signature) {
   const upper = text.toUpperCase();
   const amount = parseLeadingNumber(text);
-  const hasPositiveAmount = amount !== null && Number.isFinite(amount) && amount > 0;
 
   if (level === "err" || upper.includes("ERROR") || upper.includes("FAILED")) {
     return {
@@ -158,18 +187,22 @@ function buildProfessionalTerminalMessage(level, text, signature) {
   }
 
   if (upper.includes("CLAIM")) {
+    const claimSol = parseClaimSol(text);
+    const hasClaim = claimSol !== null && claimSol > 0;
     return {
       type: "reward",
-      message: `\u{1F7E2} [${CTRL_BRAND}] REWARDS ARE CLAIMED${amount !== null ? `: +${Number(amount).toFixed(4)} SOL` : "."}`,
+      message: `\u{1F7E2} [${CTRL_BRAND}] REWARDS ARE CLAIMED${hasClaim ? `: +${Number(claimSol).toFixed(4)} SOL` : "."}`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
-      amount: amount !== null ? `${Number(amount).toFixed(4)} SOL` : undefined,
+      amount: hasClaim ? `${Number(claimSol).toFixed(4)} SOL` : undefined,
     };
   }
 
   if (upper.includes("BUY") || upper.includes("JUPITER TX") || upper.includes("PUMP TX") || upper.includes("BOUGHT")) {
+    const buySol = parseBuySol(text);
+    const hasBuy = buySol !== null && buySol > 0;
     return {
       type: "buy",
-      message: `\u{1F7E1} [${CTRL_BRAND}] BUYBACK EXECUTED${hasPositiveAmount ? `: ${Math.trunc(amount).toLocaleString()} CTRL ACQUIRED` : "."}`,
+      message: `\u{1F7E1} [${CTRL_BRAND}] BUYBACK EXECUTED${hasBuy ? `: ${Number(buySol).toFixed(6)} SOL DEPLOYED` : "."}`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
     };
   }
@@ -183,9 +216,11 @@ function buildProfessionalTerminalMessage(level, text, signature) {
   }
 
   if (upper.includes("BURN") || upper.includes("INCINERATOR")) {
+    const burnedTokens = parseBurnTokens(text);
+    const hasBurn = burnedTokens !== null && burnedTokens > 0;
     return {
       type: "burn",
-      message: `\u{1F525} [${CTRL_BRAND}] TOKENS SENT TO INCINERATOR${hasPositiveAmount ? `: ${Math.trunc(amount).toLocaleString()} CTRL` : "."}`,
+      message: `\u{1F525} [${CTRL_BRAND}] TOKENS SENT TO INCINERATOR${hasBurn ? `: ${Math.trunc(burnedTokens).toLocaleString()} CTRL` : "."}`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
     };
   }
