@@ -661,11 +661,6 @@ async function burnAllTokens({
     }
   }
 
-  if (!candidates.length) {
-    log.info("No token balance to burn.");
-    return null;
-  }
-
   let totalBurnedTarget = 0;
   let lastSig = "";
 
