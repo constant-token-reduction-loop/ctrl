@@ -712,6 +712,12 @@ class CtrlRuntime {
 
     const event = buildProfessionalTerminalMessage(level, text, sig);
     if (!event || !String(event.message ?? "").trim()) return;
+    if (event.type === "confirm" && !/\d[\d,]*\s+CTRL/i.test(event.message)) {
+      const burned = toNumber(this.state.ctrl.lastBurn?.amountTokens, 0);
+      if (burned > 0) {
+        event.message = `\u2705 [${CTRL_BRAND}] BURN CONFIRMED ON-CHAIN: ${Math.trunc(burned).toLocaleString()} CTRL`;
+      }
+    }
     this.pushTerminal(event);
 
     this.broadcastPatch({
