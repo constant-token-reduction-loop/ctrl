@@ -117,6 +117,8 @@ function parseNumberToken(raw) {
 
 function parseClaimSol(text) {
   const s = String(text);
+  const lockedMatch = s.match(/claim\s+(?:executed|locked)\s*\+?\s*([\d.,]+)\s*SOL/i);
+  if (lockedMatch) return parseNumberToken(lockedMatch[1]);
   const plusMatch = s.match(/\+\s*([\d.,]+)\s*SOL/i);
   if (plusMatch) return parseNumberToken(plusMatch[1]);
   const claimMatch = s.match(/claimed\s*([\d.,]+)\s*(?:\)|SOL)?/i);
@@ -126,6 +128,8 @@ function parseClaimSol(text) {
 
 function parseBuySol(text) {
   const s = String(text);
+  const executedMatch = s.match(/buyback\s+executed:\s*([\d.,]+)\s*SOL/i);
+  if (executedMatch) return parseNumberToken(executedMatch[1]);
   const deployMatch = s.match(/deploying\s*([\d.,]+)\s*SOL/i);
   if (deployMatch) return parseNumberToken(deployMatch[1]);
   const boughtMatch = s.match(/bought\s*([\d.,]+)\s*SOL/i);
@@ -137,6 +141,8 @@ function parseBurnTokens(text) {
   const s = String(text);
   const burnedMatch = s.match(/burned\s*([\d.,]+)\s*tokens?/i);
   if (burnedMatch) return parseNumberToken(burnedMatch[1]);
+  const removedMatch = s.match(/([\d.,]+)\s*tokens?\s*(?:removed|erased)/i);
+  if (removedMatch) return parseNumberToken(removedMatch[1]);
   return null;
 }
 
@@ -177,7 +183,6 @@ function containsLegacyBrand(text) {
 function buildProfessionalTerminalMessage(level, text, signature) {
   const raw = String(text ?? "").trim();
   const upper = raw.toUpperCase();
-  const amount = parseLeadingNumber(text);
 
   // Suppress runtime/setup/noise lines from terminal feed.
   if (
@@ -202,7 +207,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
 
   if (upper.includes("CLAIM EXECUTED") || upper.includes("CLAIM LOCKED")) {
     const claimSol = parseClaimSol(text);
-    const hasClaim = claimSol !== null && claimSol > 0;
+    const hasClaim = claimSol !== null;
     return {
       type: "reward",
       message: `\u{1F7E2} [${CTRL_BRAND}] REWARDS ARE CLAIMED${hasClaim ? `: +${Number(claimSol).toFixed(4)} SOL` : "."}`,
@@ -218,7 +223,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     upper.includes("BUY FILLED")
   ) {
     const buySol = parseBuySol(text);
-    const hasBuy = buySol !== null && buySol > 0;
+    const hasBuy = buySol !== null;
     return {
       type: "buy",
       message: `\u{1F7E1} [${CTRL_BRAND}] BUYBACK EXECUTED${hasBuy ? `: ${Number(buySol).toFixed(6)} SOL DEPLOYED` : "."}`,
