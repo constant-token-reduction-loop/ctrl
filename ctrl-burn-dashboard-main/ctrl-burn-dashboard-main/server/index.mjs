@@ -147,6 +147,7 @@ function containsLegacyBrand(text) {
 function buildProfessionalTerminalMessage(level, text, signature) {
   const upper = text.toUpperCase();
   const amount = parseLeadingNumber(text);
+  const hasPositiveAmount = amount !== null && Number.isFinite(amount) && amount > 0;
 
   if (level === "err" || upper.includes("ERROR") || upper.includes("FAILED")) {
     return {
@@ -168,7 +169,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
   if (upper.includes("BUY") || upper.includes("JUPITER TX") || upper.includes("PUMP TX") || upper.includes("BOUGHT")) {
     return {
       type: "buy",
-      message: `\u{1F7E1} [${CTRL_BRAND}] BUYBACK EXECUTED${amount !== null ? `: ${Math.trunc(amount).toLocaleString()} CTRL ACQUIRED` : "."}`,
+      message: `\u{1F7E1} [${CTRL_BRAND}] BUYBACK EXECUTED${hasPositiveAmount ? `: ${Math.trunc(amount).toLocaleString()} CTRL ACQUIRED` : "."}`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
     };
   }
@@ -184,7 +185,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
   if (upper.includes("BURN") || upper.includes("INCINERATOR")) {
     return {
       type: "burn",
-      message: `\u{1F525} [${CTRL_BRAND}] TOKENS SENT TO INCINERATOR${amount !== null ? `: ${Math.trunc(amount).toLocaleString()} CTRL` : "."}`,
+      message: `\u{1F525} [${CTRL_BRAND}] TOKENS SENT TO INCINERATOR${hasPositiveAmount ? `: ${Math.trunc(amount).toLocaleString()} CTRL` : "."}`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
     };
   }
