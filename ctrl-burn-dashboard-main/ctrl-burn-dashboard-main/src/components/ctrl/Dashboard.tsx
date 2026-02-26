@@ -607,16 +607,26 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
 
   const combinedEventsChronological = useMemo(() => {
     const source = data.terminal.events.length > 0 ? data.terminal.events : mockTerminalEvents;
-    return [...source]
+    const filtered = [...source]
       .filter((event) => {
         const msg = String(event.message ?? "").trim();
         if (!msg) return false;
         if (/rpc|retrying|getsignaturesforaddress|gettokensupply|connectivity recovered/i.test(msg)) return false;
         if (/worker stream disconnected|uncaught exception|unhandled rejection|eaddrinuse|listen eaddrinuse/i.test(msg)) return false;
+        if (/system update:\s*runtime health nominal/i.test(msg)) return false;
         return true;
       })
-      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-      .slice(-TERMINAL_LOG_LIMIT);
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const deduped: TerminalEvent[] = [];
+    for (const event of filtered) {
+      const msg = String(event.message ?? "").trim();
+      const prev = deduped[deduped.length - 1];
+      if (prev && String(prev.message ?? "").trim() === msg && prev.type === event.type) continue;
+      deduped.push(event);
+    }
+
+    return deduped.slice(-TERMINAL_LOG_LIMIT);
   }, [data.terminal.events, mockTerminalEvents]);
 
   const terminalEvents = useMemo(() => [...combinedEventsChronological].reverse(), [combinedEventsChronological]);

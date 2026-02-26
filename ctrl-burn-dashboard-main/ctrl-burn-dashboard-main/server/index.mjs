@@ -189,7 +189,7 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
-  if (upper.includes("NEXT BURN") || upper.includes("CYCLE")) {
+  if (upper.includes("NEXT BURN") || upper.includes("COOLDOWN LIVE")) {
     return {
       type: "info",
       message: `\u{1F7E3} [${CTRL_BRAND}] CYCLE LIVE: 69-SECOND LOOP ACTIVE.`,
@@ -197,10 +197,27 @@ function buildProfessionalTerminalMessage(level, text, signature) {
     };
   }
 
+  // Avoid generic spam lines in terminal output.
+  if (upper.includes("SYSTEM UPDATE: RUNTIME HEALTH NOMINAL")) {
+    return null;
+  }
+
+  // Pass through useful live logs instead of collapsing into the same generic line.
+  const compact = String(text)
+    .replace(/^\[[^\]]+\]\s*/g, "")
+    .replace(/^(INFO|OK|WARN|ERROR)\s+/i, "")
+    .trim();
+  if (compact) {
+    return {
+      type: level === "err" ? "error" : "info",
+      message: compact,
+      txUrl: signature ? formatTxUrl(signature) : undefined,
+    };
+  }
+
   return {
     type: "info",
-    message: `\u{1F7E3} [${CTRL_BRAND}] SYSTEM UPDATE: Runtime health nominal.`,
-    txUrl: signature ? formatTxUrl(signature) : undefined,
+    message: "",
   };
 }
 
@@ -620,6 +637,7 @@ class CtrlRuntime {
     }
 
     const event = buildProfessionalTerminalMessage(level, text, sig);
+    if (!event || !String(event.message ?? "").trim()) return;
     this.pushTerminal(event);
 
     this.broadcastPatch({
