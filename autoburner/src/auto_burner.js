@@ -693,91 +693,77 @@ async function burnAllTokens({
     }
   }
 
-  // Burn target mint only (after conversions, if any), using jsonParsed account reads.
-  const readTargetAccounts = async () => {
-    const rows = await rpcPool.withRetry(
-      (conn) =>
-        conn.getTokenAccountsByOwner(
-          payer.publicKey,
-          { mint: mint.toBase58() },
-          { encoding: "jsonParsed", commitment: "confirmed" }
-        ),
-      "getTokenAccountsByOwnerByMint"
-    );
-    const list = Array.isArray(rows?.value) ? rows.value : [];
-    return list
-      .map((row) => {
-        const parsed = row?.account?.data?.parsed?.info;
-        const amountRaw = String(parsed?.tokenAmount?.amount ?? "0");
-        const decimals = Number(parsed?.tokenAmount?.decimals ?? 0);
-        let amount;
-        try {
-          amount = BigInt(amountRaw);
-        } catch {
-          amount = 0n;
-        }
-        if (amount <= 0n) return null;
-        const accountOwnerProgram = String(row?.account?.owner ?? "");
-        const burnProgramId =
-          accountOwnerProgram === TOKEN_2022_PROGRAM_ID.toBase58()
-            ? TOKEN_2022_PROGRAM_ID
-            : TOKEN_PROGRAM_ID;
-        return {
-          tokenAccount: new PublicKey(String(row.pubkey)),
-          amount,
-          decimals,
-          programId: burnProgramId,
-        };
-      })
-      .filter(Boolean);
-  };
-
-  let targetAccounts = [];
+  // Burn target mint only (after conversions, if any), via deterministic ATA lookup.
+  let targetProgramId;
   try {
-    targetAccounts = await readTargetAccounts();
+    targetProgramId = await getTokenProgramId(rpcPool, mint);
   } catch (err) {
     if (isRpcBlockedError(err)) {
-      log.warn("Target burn account query blocked by RPC. Skipping burn this cycle.");
+      log.warn("Mint program lookup blocked by RPC. Skipping burn this cycle.");
       return null;
     }
     throw err;
   }
 
-  if (!targetAccounts.length) {
+  const targetAta = await getAssociatedTokenAddress(
+    mint,
+    payer.publicKey,
+    false,
+    targetProgramId
+  );
+
+  let targetAmount = 0n;
+  let targetDecimals = 0;
+  try {
+    const bal = await rpcPool.withRetry(
+      (conn) => conn.getTokenAccountBalance(targetAta, "confirmed"),
+      "getTokenAccountBalance"
+    );
+    const amountRaw = String(bal?.value?.amount ?? "0");
+    targetDecimals = Number(bal?.value?.decimals ?? 0);
+    targetAmount = BigInt(amountRaw);
+  } catch (err) {
+    if (isRpcBlockedError(err)) {
+      log.warn("Target token balance query blocked by RPC. Skipping burn this cycle.");
+      return null;
+    }
+    log.info("Target token account missing; nothing to burn.");
+    return null;
+  }
+
+  if (targetAmount <= 0n) {
     log.info("Target token balance is zero; nothing to burn.");
     return null;
   }
 
-  for (const acc of targetAccounts) {
-    try {
-      const ix = createBurnCheckedInstruction(
-        acc.tokenAccount,
-        mint,
-        payer.publicKey,
-        acc.amount,
-        acc.decimals,
-        [],
-        acc.programId
-      );
-      const latest = await rpcPool.withRetry(
-        (conn) => conn.getLatestBlockhash("confirmed"),
-        "getLatestBlockhash"
-      );
-      const tx = new Transaction().add(ix);
-      tx.feePayer = payer.publicKey;
-      tx.recentBlockhash = latest.blockhash;
-      const sig = await rpcPool.withRetry(
-        (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
-        "sendTransaction"
-      );
-      await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
-      const burned = Number(acc.amount) / 10 ** acc.decimals;
-      totalBurnedTarget += burned;
-      lastSig = sig;
-      log.tx("Burn Tx", sig);
-    } catch (err) {
-      log.warn(`Target burn account step skipped: ${err?.message ?? String(err)}`);
-    }
+  try {
+    const ix = createBurnCheckedInstruction(
+      targetAta,
+      mint,
+      payer.publicKey,
+      targetAmount,
+      targetDecimals,
+      [],
+      targetProgramId
+    );
+    const latest = await rpcPool.withRetry(
+      (conn) => conn.getLatestBlockhash("confirmed"),
+      "getLatestBlockhash"
+    );
+    const tx = new Transaction().add(ix);
+    tx.feePayer = payer.publicKey;
+    tx.recentBlockhash = latest.blockhash;
+    const sig = await rpcPool.withRetry(
+      (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
+      "sendTransaction"
+    );
+    await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
+    totalBurnedTarget = Number(targetAmount) / 10 ** targetDecimals;
+    lastSig = sig;
+    log.tx("Burn Tx", sig);
+  } catch (err) {
+    log.warn(`Target burn step skipped: ${err?.message ?? String(err)}`);
+    return null;
   }
 
   log.burn(`Burned ${totalBurnedTarget.toLocaleString()} tokens.`);
@@ -1070,6 +1056,7 @@ async function runOnce(config) {
     claimPool,
     buyRoute,
     minSolKeep,
+    gasReserveLamports,
     buyFeeBuffer,
     minSolRequired,
     claimFeeBuffer,
@@ -1249,20 +1236,28 @@ async function runOnce(config) {
   }
 
   const claimedSol = Number(claimed) / 1_000_000_000;
+  const dynamicKeepLamportsEarly =
+    balanceAfter > (minSolKeep + buyFeeBuffer) ? minSolKeep : gasReserveLamports;
+  const earlyReserveLamports = dynamicKeepLamportsEarly + buyFeeBuffer;
+  const earlySpendableLamports = balanceAfter - earlyReserveLamports;
 
   // Burn any existing tokens before attempting a buy
-  try {
-    await burnAllTokens({
-      rpcPool,
-      payer: keypair,
-      mint,
-      burnAnyToken,
-      jupiterApiKey,
-      slippagePct: slippage,
-      priorityFeeLamports: parseSolToLamports(String(priorityFee)),
-    });
-  } catch (err) {
-    log.warn(`Burn (pre-buy) skipped: ${err.message}`);
+  if (claimed > 0n || earlySpendableLamports > 0n) {
+    try {
+      await burnAllTokens({
+        rpcPool,
+        payer: keypair,
+        mint,
+        burnAnyToken,
+        jupiterApiKey,
+        slippagePct: slippage,
+        priorityFeeLamports: parseSolToLamports(String(priorityFee)),
+      });
+    } catch (err) {
+      log.warn(`Burn (pre-buy) skipped: ${err.message}`);
+    }
+  } else {
+    log.info("No rewards and no spendable SOL; skipping pre-buy burn check.");
   }
 
   let programId = null;
@@ -1298,7 +1293,9 @@ async function runOnce(config) {
         "getMinimumBalanceForRentExemption"
       );
       rentLamports = BigInt(rent);
-      const needed = rentLamports + minSolKeep + buyFeeBuffer;
+      const dynamicKeepLamportsForAta =
+        balanceAfter > (minSolKeep + buyFeeBuffer) ? minSolKeep : gasReserveLamports;
+      const needed = rentLamports + dynamicKeepLamportsForAta + buyFeeBuffer;
       if (balanceAfter < needed) {
         ataReady = false;
         log.warn(
@@ -1397,7 +1394,9 @@ async function runOnce(config) {
       log.warn("Token account not ready (rent/fees). Skipping buy this cycle.");
       return;
     }
-    const reserveLamports = minSolKeep + buyFeeBuffer;
+    const dynamicKeepLamports =
+      balanceAfter > (minSolKeep + buyFeeBuffer) ? minSolKeep : gasReserveLamports;
+    const reserveLamports = dynamicKeepLamports + buyFeeBuffer;
     const maxSpendable = balanceAfter - reserveLamports;
     let spendLamports = maxSpendable;
     if (spendLamports < 0n) spendLamports = 0n;
@@ -1548,7 +1547,7 @@ async function runOnce(config) {
             slippagePct: slippage,
             priorityFeeLamports: parseSolToLamports(String(priorityFee)),
           });
-          if (burnResult?.burnedTokens !== undefined) {
+          if (burnResult?.burnedTokens !== undefined && burnResult.burnedTokens > 0) {
             uiState.burned = `${burnResult.burnedTokens.toLocaleString()} tokens`;
             if (tokenUsd !== null && solUsd !== null) {
               const burnedUsd = burnResult.burnedTokens * tokenUsd;
@@ -1561,9 +1560,14 @@ async function runOnce(config) {
             );
             uiState.lastAction = "Burned";
             emitStatus();
+          } else {
+            log.warn(`CYCLE #${cycleId} STEP ${step}/${splitCount} BUY EXECUTED BUT NO BURN CONFIRMED. HALTING FURTHER BUYS THIS CYCLE.`);
+            break;
           }
         } catch (err) {
           log.warn(`Burn (step ${step}) skipped: ${err.message}`);
+          log.warn(`CYCLE #${cycleId} STEP ${step}/${splitCount} BUY EXECUTED BUT BURN FAILED. HALTING FURTHER BUYS THIS CYCLE.`);
+          break;
         }
       }
     } else {
@@ -1573,7 +1577,7 @@ async function runOnce(config) {
         );
       }
       log.info(
-        `Not enough SOL to buy after reserve. Balance ${lamportsToSolString(balanceAfter)}, reserve ${lamportsToSolString(minSolKeep)}, buffer ${lamportsToSolString(buyFeeBuffer)}.`
+        `Not enough SOL to buy after reserve. Balance ${lamportsToSolString(balanceAfter)}, reserve ${lamportsToSolString(dynamicKeepLamports)}, buffer ${lamportsToSolString(buyFeeBuffer)}.`
       );
     }
   } else {
@@ -1647,7 +1651,8 @@ async function main() {
   const intervalMs = Number(process.env.INTERVAL_MS ?? "180000");
   const uiEnable = (process.env.UI_ENABLE ?? "1") !== "0";
   const uiPort = Number(process.env.UI_PORT ?? "8790");
-  const minSolKeep = parseSolToLamports(process.env.MIN_SOL_KEEP ?? "0");
+  const minSolKeep = parseSolToLamports(process.env.MIN_SOL_KEEP ?? "0.005");
+  const gasReserveLamports = parseSolToLamports(process.env.GAS_RESERVE_SOL ?? "0.005");
   const buyFeeBuffer = parseSolToLamports(process.env.BUY_SOL_FEE_BUFFER ?? "0");
   const minSolRequired = parseSolToLamports(process.env.MIN_SOL_REQUIRED ?? "0");
   const effectiveMinKeep = minSolKeep;
@@ -1706,6 +1711,7 @@ async function main() {
     pumpPortalApiKey,
     buyRoute,
     minSolKeep: effectiveMinKeep,
+    gasReserveLamports,
     buyFeeBuffer,
     minSolRequired: effectiveMinRequired,
     claimFeeBuffer,
@@ -1748,6 +1754,7 @@ async function main() {
       pumpPortalApiKey,
       buyRoute,
         minSolKeep: effectiveMinKeep,
+        gasReserveLamports,
         buyFeeBuffer,
         minSolRequired: effectiveMinRequired,
         claimFeeBuffer,
