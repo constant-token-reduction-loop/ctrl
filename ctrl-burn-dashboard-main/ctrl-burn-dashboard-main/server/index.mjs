@@ -146,6 +146,12 @@ function parseBurnTokens(text) {
   return null;
 }
 
+function formatClaimSolForTerminal(value) {
+  if (value === null || !Number.isFinite(value)) return "";
+  if (value > 0 && value < 0.0001) return "<0.0001";
+  return Number(value).toFixed(4);
+}
+
 function normalizeWorkerMessage(text) {
   let msg = String(text ?? "")
     .replace(/^\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|A\.M\.|P\.M\.)?\s*/i, "")
@@ -208,11 +214,12 @@ function buildProfessionalTerminalMessage(level, text, signature) {
   if (upper.includes("CLAIM EXECUTED") || upper.includes("CLAIM LOCKED")) {
     const claimSol = parseClaimSol(text);
     const hasClaim = claimSol !== null;
+    const claimDisplay = hasClaim ? formatClaimSolForTerminal(claimSol) : "";
     return {
       type: "reward",
-      message: `\u{1F7E2} [${CTRL_BRAND}] REWARDS ARE CLAIMED${hasClaim ? `: +${Number(claimSol).toFixed(4)} SOL` : "."}`,
+      message: `\u{1F7E2} [${CTRL_BRAND}] REWARDS ARE CLAIMED${hasClaim ? `: +${claimDisplay} SOL` : "."}`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
-      amount: hasClaim ? `${Number(claimSol).toFixed(4)} SOL` : undefined,
+      amount: hasClaim ? `${claimDisplay} SOL` : undefined,
     };
   }
 
@@ -232,9 +239,11 @@ function buildProfessionalTerminalMessage(level, text, signature) {
   }
 
   if (upper.includes("BURN TX") || upper.includes("BURN CONFIRMED") || upper.includes("ON-CHAIN CONFIRMATION LOCKED")) {
+    const burnedTokens = parseBurnTokens(text);
+    const hasBurnAmount = burnedTokens !== null && burnedTokens > 0;
     return {
       type: "confirm",
-      message: `\u2705 [${CTRL_BRAND}] BURN CONFIRMED ON-CHAIN.`,
+      message: `\u2705 [${CTRL_BRAND}] BURN CONFIRMED ON-CHAIN${hasBurnAmount ? `: ${Math.trunc(burnedTokens).toLocaleString()} CTRL` : "."}`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
     };
   }

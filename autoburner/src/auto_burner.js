@@ -826,6 +826,8 @@ async function runOnce(config) {
     quoteSolLamports,
     birdeyeApiKey,
     jupiterApiKey,
+    buySplitMax,
+    buySplitMinUsd,
   } = config;
   state.cycleCount += 1;
   const cycleId = state.cycleCount;
@@ -1130,84 +1132,88 @@ async function runOnce(config) {
     const minBuyLamports = parseSolToLamports(String(minBuySol));
 
     if (spendLamports >= minBuyLamports && spendLamports > 0n) {
-      let attemptLamports = spendLamports;
-      const backoffSteps = [
-        0n,
-        200000n,  // 0.0002 SOL
-        500000n,  // 0.0005 SOL
-        1000000n, // 0.001 SOL
-        2000000n, // 0.002 SOL
-      ];
-      let warnedBonding = false;
-      let success = false;
-      for (let i = 0; i < backoffSteps.length; i += 1) {
-        const reduceBy = backoffSteps[i];
-        const adjusted = attemptLamports - reduceBy;
-        if (adjusted <= 0n) continue;
-        const amountSol = lamportsToSolString(adjusted);
-        try {
-          let sig;
-          const useJupiter = buyRoute === "jupiter" || (buyRoute === "auto" && state.bondingComplete);
-          if (useJupiter) {
-            sig = await buyViaJupiter({
-              rpcPool,
-              keypair,
-              mint,
-              inLamports: adjusted,
-              slippagePct: slippage,
-              jupiterApiKey,
-              priorityFeeLamports: parseSolToLamports(String(priorityFee)),
-            });
-            const buySol = Number(adjusted) / 1_000_000_000;
-            const buyUsd = solUsd !== null ? buySol * solUsd : null;
-            log.ok(`Bought ${formatSol(buySol)} (${formatUsd(buyUsd)}) via Jupiter.`);
-            log.tx("Jupiter Tx", sig);
-            log.info(`CYCLE #${cycleId} BUY CONFIRMED. INVENTORY FILLED. PREPARING BURN PIPELINE.`);
+      const configuredSplitMax = Math.floor(Number(buySplitMax ?? 0));
+      const splitHardCap = Math.max(1, Math.floor(Number(process.env.BUY_SPLIT_HARD_CAP ?? 10000)));
+      const splitMax = configuredSplitMax > 0 ? configuredSplitMax : splitHardCap;
+      const splitMinUsd = Math.max(0.2, Number(buySplitMinUsd ?? 0.2));
+      const minSplitLamportsByUsd =
+        solUsd !== null && splitMinUsd > 0
+          ? parseSolToLamports((splitMinUsd / solUsd).toFixed(9))
+          : 0n;
+      const minSplitLamports = minSplitLamportsByUsd > minBuyLamports ? minSplitLamportsByUsd : minBuyLamports;
+      const possibleSplits = minSplitLamports > 0n ? Number(spendLamports / minSplitLamports) : 1;
+      const splitCount = Math.max(1, Math.min(splitMax, Math.max(1, possibleSplits)));
+
+      log.info(
+        `CYCLE #${cycleId} SMART SPLIT MODE: ${splitCount} BUY/BURN STEPS (min step ${lamportsToSolString(minSplitLamports)} SOL).`
+      );
+
+      const buyOneStep = async (stepLamports, stepIndex, stepTotal) => {
+        const backoffSteps = [0n, 200000n, 500000n, 1000000n, 2000000n];
+        let warnedBonding = false;
+        for (let i = 0; i < backoffSteps.length; i += 1) {
+          const adjusted = stepLamports - backoffSteps[i];
+          if (adjusted <= 0n || adjusted < minBuyLamports) continue;
+          const amountSol = lamportsToSolString(adjusted);
+          try {
+            let sig;
+            const useJupiter = buyRoute === "jupiter" || (buyRoute === "auto" && state.bondingComplete);
+            if (useJupiter) {
+              sig = await buyViaJupiter({
+                rpcPool,
+                keypair,
+                mint,
+                inLamports: adjusted,
+                slippagePct: slippage,
+                jupiterApiKey,
+                priorityFeeLamports: parseSolToLamports(String(priorityFee)),
+              });
+              const buySol = Number(adjusted) / 1_000_000_000;
+              const buyUsd = solUsd !== null ? buySol * solUsd : null;
+              log.ok(`STEP ${stepIndex}/${stepTotal} Bought ${formatSol(buySol)} (${formatUsd(buyUsd)}) via Jupiter.`);
+              log.tx("Jupiter Tx", sig);
+            } else {
+              sig = await sendPumpPortalTx(rpcPool, keypair, {
+                publicKey: keypair.publicKey.toBase58(),
+                action: "buy",
+                mint: mint.toBase58(),
+                denominatedInSol: "true",
+                amount: amountSol,
+                slippage,
+                priorityFee,
+                pool,
+              });
+              const buySol = Number(adjusted) / 1_000_000_000;
+              const buyUsd = solUsd !== null ? buySol * solUsd : null;
+              log.ok(`STEP ${stepIndex}/${stepTotal} Bought ${formatSol(buySol)} (${formatUsd(buyUsd)}) via Pump.`);
+              log.tx("Pump Tx", sig);
+            }
+            log.info(`CYCLE #${cycleId} STEP ${stepIndex}/${stepTotal} BUY CONFIRMED. PREPARING BURN.`);
             uiState.lastAction = "Bought";
-          } else {
-            sig = await sendPumpPortalTx(rpcPool, keypair, {
-              publicKey: keypair.publicKey.toBase58(),
-              action: "buy",
-              mint: mint.toBase58(),
-              denominatedInSol: "true",
-              amount: amountSol,
-              slippage,
-              priorityFee,
-              pool,
-            });
-            const buySol = Number(adjusted) / 1_000_000_000;
-            const buyUsd = solUsd !== null ? buySol * solUsd : null;
-            log.ok(`Bought ${formatSol(buySol)} (${formatUsd(buyUsd)}) via Pump.`);
-            log.tx("Pump Tx", sig);
-            log.info(`CYCLE #${cycleId} BUY CONFIRMED. INVENTORY FILLED. PREPARING BURN PIPELINE.`);
-            uiState.lastAction = "Bought";
-          }
-          success = true;
-          break;
-        } catch (err) {
-          const msg = err.message ?? String(err);
-          const isPumpBadRequest = msg.includes("PumpPortal error 400");
-          const isBondingComplete =
-            msg.includes("BondingCurveComplete") ||
-            msg.includes("custom program error: 0x1775") ||
-            msg.includes("Error Code: BondingCurveComplete");
-          if (isBondingComplete) {
-            state.bondingComplete = true;
-            if (buyRoute === "pump") {
+            return true;
+          } catch (err) {
+            const msg = err.message ?? String(err);
+            const isPumpBadRequest = msg.includes("PumpPortal error 400");
+            const isBondingComplete =
+              msg.includes("BondingCurveComplete") ||
+              msg.includes("custom program error: 0x1775") ||
+              msg.includes("Error Code: BondingCurveComplete");
+            if (isBondingComplete) {
+              state.bondingComplete = true;
+              if (buyRoute === "pump") {
+                if (!warnedBonding) {
+                  log.warn("Bonding curve complete. Pump buy disabled by config.");
+                  warnedBonding = true;
+                }
+                return false;
+              }
               if (!warnedBonding) {
-                log.warn("Bonding curve complete. Pump buy disabled by config.");
+                log.warn("Bonding curve complete. Switching to Jupiter buy.");
                 warnedBonding = true;
               }
-              break;
+              continue;
             }
-            if (!warnedBonding) {
-              log.warn("Bonding curve complete. Switching to Jupiter buy.");
-              warnedBonding = true;
-            }
-            continue;
-          }
-          if (isPumpBadRequest) {
-            if (buyRoute !== "pump") {
+            if (isPumpBadRequest && buyRoute !== "pump") {
               state.bondingComplete = true;
               if (!warnedBonding) {
                 log.warn("Pump buy rejected. Switching to Jupiter buy.");
@@ -1215,32 +1221,71 @@ async function runOnce(config) {
               }
               continue;
             }
+            if (msg.includes("Jupiter")) log.warn(`Jupiter buy failed: ${msg}`);
+            const noRoute =
+              msg.includes("no route") ||
+              msg.includes("Jupiter quote returned no route") ||
+              msg.includes("Jupiter swap returned no transaction");
+            if (noRoute) {
+              log.warn("No Jupiter route for this amount. Skipping this step.");
+              return false;
+            }
+            const isInsufficient =
+              msg.includes("insufficient") ||
+              msg.includes("Transaction results in an account") ||
+              msg.includes("custom program error: 0x1");
+            if (isInsufficient) {
+              log.warn("Buy failed (insufficient funds). Skipping this step.");
+              return false;
+            }
+            log.err(`Buy failed: ${msg}`);
+            return false;
           }
-          if (msg.includes("Jupiter")) {
-            log.warn(`Jupiter buy failed: ${msg}`);
-          }
-          const noRoute =
-            msg.includes("no route") ||
-            msg.includes("Jupiter quote returned no route") ||
-            msg.includes("Jupiter swap returned no transaction");
-          if (noRoute) {
-            log.warn("No Jupiter route for this amount. Skipping buy this cycle.");
-            break;
-          }
-          const isInsufficient =
-            msg.includes("insufficient") ||
-            msg.includes("Transaction results in an account") ||
-            msg.includes("custom program error: 0x1");
-          if (isInsufficient) {
-            log.warn("Buy failed (insufficient funds). Skipping buy this cycle.");
-            break;
-          }
-          log.err(`Buy failed: ${msg}`);
+        }
+        return false;
+      };
+
+      let remainingLamports = spendLamports;
+      for (let step = 1; step <= splitCount; step += 1) {
+        const stepsLeft = splitCount - step + 1;
+        const stepLamports =
+          step === splitCount ? remainingLamports : remainingLamports / BigInt(stepsLeft);
+        if (stepLamports < minBuyLamports) {
+          log.warn(`STEP ${step}/${splitCount} below minimum buy size. Stopping split loop.`);
           break;
         }
-      }
-      if (!success) {
-        log.info("Buy did not succeed after retries.");
+        log.info(
+          `CYCLE #${cycleId} BUY ROUTE LOCKED. STEP ${step}/${splitCount} DEPLOYING ${lamportsToSolString(stepLamports)} SOL.`
+        );
+        const bought = await buyOneStep(stepLamports, step, splitCount);
+        if (!bought) continue;
+        remainingLamports -= stepLamports;
+
+        try {
+          log.info(`CYCLE #${cycleId} STEP ${step}/${splitCount} BURN PREP COMPLETE. STAGING TOKENS.`);
+          const burnResult = await burnAllTokens({
+            rpcPool,
+            payer: keypair,
+            mint,
+            pricing: { tokenUsd, solUsd },
+          });
+          if (burnResult?.burnedTokens !== undefined) {
+            uiState.burned = `${burnResult.burnedTokens.toLocaleString()} tokens`;
+            if (tokenUsd !== null && solUsd !== null) {
+              const burnedUsd = burnResult.burnedTokens * tokenUsd;
+              const burnedSol = burnedUsd / solUsd;
+              uiState.burnValue = `${formatSol(burnedSol)} (${formatUsd(burnedUsd)})`;
+            }
+            log.info(`CYCLE #${cycleId} STEP ${step}/${splitCount} BURN TX SUBMITTED. SUPPLY REDUCTION IN FLIGHT.`);
+            log.info(
+              `CYCLE #${cycleId} STEP ${step}/${splitCount} BURN CONFIRMED. ${Math.round(burnResult.burnedTokens).toLocaleString()} TOKENS REMOVED FROM CIRCULATION.`
+            );
+            uiState.lastAction = "Burned";
+            emitStatus();
+          }
+        } catch (err) {
+          log.err(`Burn (step ${step}) failed: ${err.message}`);
+        }
       }
     } else {
       if (spendLamports < minBuyLamports) {
@@ -1257,29 +1302,26 @@ async function runOnce(config) {
   }
 
   try {
-    log.info(`CYCLE #${cycleId} BURN PREP COMPLETE. STAGING TOKENS.`);
+    // Final sweep in case any dust tokens remain after split sequence.
     const burnResult = await burnAllTokens({
       rpcPool,
       payer: keypair,
       mint,
       pricing: { tokenUsd, solUsd },
     });
-    if (burnResult?.burnedTokens !== undefined) {
+    if (burnResult?.burnedTokens !== undefined && burnResult.burnedTokens > 0) {
       uiState.burned = `${burnResult.burnedTokens.toLocaleString()} tokens`;
       if (tokenUsd !== null && solUsd !== null) {
         const burnedUsd = burnResult.burnedTokens * tokenUsd;
         const burnedSol = burnedUsd / solUsd;
         uiState.burnValue = `${formatSol(burnedSol)} (${formatUsd(burnedUsd)})`;
       }
-      log.info(`CYCLE #${cycleId} BURN TX SUBMITTED. SUPPLY REDUCTION IN FLIGHT.`);
-      log.info(
-        `CYCLE #${cycleId} BURN CONFIRMED. ${Math.round(burnResult.burnedTokens).toLocaleString()} TOKENS REMOVED FROM CIRCULATION.`
-      );
+      log.info(`CYCLE #${cycleId} FINAL SWEEP BURN CONFIRMED. ${Math.round(burnResult.burnedTokens).toLocaleString()} TOKENS REMOVED.`);
       uiState.lastAction = "Burned";
     }
     emitStatus();
   } catch (err) {
-    log.err(`Burn (post-buy) failed: ${err.message}`);
+    log.err(`Burn (post-buy sweep) failed: ${err.message}`);
   }
   } catch (err) {
     log.err(`Cycle failed: ${err.message ?? String(err)}`);
@@ -1334,6 +1376,8 @@ async function main() {
   const priceGuardMode = (process.env.PRICE_GUARD_MODE ?? "auto").toLowerCase();
   const maxPriceDeviationPct = Number(process.env.MAX_PRICE_DEVIATION_PCT ?? "15");
   const quoteSolLamports = Number(process.env.PRICE_QUOTE_SOL_LAMPORTS ?? "100000000");
+  const buySplitMax = Number(process.env.BUY_SPLIT_MAX ?? "0");
+  const buySplitMinUsd = Number(process.env.BUY_SPLIT_MIN_USD ?? "0.20");
   const birdeyeApiKey = process.env.BIRDEYE_API_KEY ?? "";
   const jupiterApiKey = process.env.JUPITER_API_KEY ?? "";
 
@@ -1387,6 +1431,8 @@ async function main() {
     priceGuardMode,
     maxPriceDeviationPct,
     quoteSolLamports,
+    buySplitMax,
+    buySplitMinUsd,
     birdeyeApiKey,
     jupiterApiKey,
   });
@@ -1426,6 +1472,8 @@ async function main() {
         priceGuardMode,
         maxPriceDeviationPct,
         quoteSolLamports,
+        buySplitMax,
+        buySplitMinUsd,
         birdeyeApiKey,
         jupiterApiKey,
       });
