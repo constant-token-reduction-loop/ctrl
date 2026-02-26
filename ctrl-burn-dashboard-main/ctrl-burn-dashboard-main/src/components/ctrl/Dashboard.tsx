@@ -40,14 +40,12 @@ interface MockCycleMetrics {
   burnTokens: number;
 }
 
-const PLUG_POSITION_STORAGE_KEY = "ctrl.dashboard.plugPosition.v4";
-const DEFAULT_PLUG_POSITION = { left: 302, bottom: 138 };
+const DEFAULT_PLUG_POSITION = { left: 520, bottom: 94 };
 const ENABLE_PLUG_CALIBRATION = false;
 
 const TOP_BURNS_STORAGE_KEY = "ctrl.dashboard.topBurns.v3";
 const TOP_BURNS_LIMIT = 5;
-const TOP_BURNS_POSITION_STORAGE_KEY = "ctrl.dashboard.topBurnsPosition.v4";
-const DEFAULT_TOP_BURNS_POSITION = { left: 122, top: 158 };
+const DEFAULT_TOP_BURNS_POSITION = { left: 208, top: 346 };
 const ENABLE_TOP_BURNS_CALIBRATION = false;
 const GITHUB_URL = import.meta.env.VITE_GITHUB_URL ?? "https://github.com";
 const PUMPFUN_URL = import.meta.env.VITE_PUMPFUN_URL ?? "https://pump.fun";
@@ -460,18 +458,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   const [mockTerminalEvents, setMockTerminalEvents] = useState<TerminalEvent[]>(() => buildMockTimeline(Date.now()));
   const [typedLengths, setTypedLengths] = useState<Record<string, number>>({});
   const [pressedKey, setPressedKey] = useState<string | null>(null);
-  const [plugPosition, setPlugPosition] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_PLUG_POSITION;
-    try {
-      const raw = window.localStorage.getItem(PLUG_POSITION_STORAGE_KEY);
-      if (!raw) return DEFAULT_PLUG_POSITION;
-      const parsed = JSON.parse(raw) as { left?: number; bottom?: number };
-      if (typeof parsed.left !== "number" || typeof parsed.bottom !== "number") return DEFAULT_PLUG_POSITION;
-      return { left: parsed.left, bottom: parsed.bottom };
-    } catch {
-      return DEFAULT_PLUG_POSITION;
-    }
-  });
+  const [plugPosition, setPlugPosition] = useState(DEFAULT_PLUG_POSITION);
 
   const dragStartRef = useRef<{ x: number; y: number; left: number; bottom: number } | null>(null);
   const topBurnsDragStartRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
@@ -483,18 +470,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   const nextTypeDelayRef = useRef<number>(TYPING_SPEED_MS);
   const lastCtrlPressCycleRef = useRef<number>(-1);
 
-  const [topBurnsPosition, setTopBurnsPosition] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_TOP_BURNS_POSITION;
-    try {
-      const raw = window.localStorage.getItem(TOP_BURNS_POSITION_STORAGE_KEY);
-      if (!raw) return DEFAULT_TOP_BURNS_POSITION;
-      const parsed = JSON.parse(raw) as { left?: number; top?: number };
-      if (typeof parsed.left !== "number" || typeof parsed.top !== "number") return DEFAULT_TOP_BURNS_POSITION;
-      return { left: parsed.left, top: parsed.top };
-    } catch {
-      return DEFAULT_TOP_BURNS_POSITION;
-    }
-  });
+  const [topBurnsPosition, setTopBurnsPosition] = useState(DEFAULT_TOP_BURNS_POSITION);
 
   const [topBurns, setTopBurns] = useState<TopBurn[]>(() => {
     if (typeof window === "undefined") return [];
@@ -563,7 +539,6 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       };
 
       setPlugPosition(next);
-      window.localStorage.setItem(PLUG_POSITION_STORAGE_KEY, JSON.stringify(next));
     };
 
     const onUp = () => {
@@ -591,7 +566,6 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       };
 
       setTopBurnsPosition(next);
-      window.localStorage.setItem(TOP_BURNS_POSITION_STORAGE_KEY, JSON.stringify(next));
     };
 
     const onUp = () => {
