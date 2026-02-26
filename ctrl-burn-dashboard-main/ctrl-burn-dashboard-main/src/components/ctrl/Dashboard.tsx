@@ -626,8 +626,32 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
     const deduped: TerminalEvent[] = [];
     for (const event of filtered) {
       const msg = String(event.message ?? "").trim();
+      // Drop malformed glyph-only fragments.
+      if (msg.length <= 3 && /^[^\w\d]+$/i.test(msg)) continue;
+      if (msg.length <= 6 && /^(?:�|🔥|🟣|🟡|🟢|❌|✅|🧾|📊|\s)+$/u.test(msg)) continue;
+
       const prev = deduped[deduped.length - 1];
-      if (prev && String(prev.message ?? "").trim() === msg && prev.type === event.type) continue;
+      if (prev) {
+        const prevMsg = String(prev.message ?? "").trim();
+        const prevTs = new Date(prev.timestamp).getTime();
+        const curTs = new Date(event.timestamp).getTime();
+        const sameType = prev.type === event.type;
+        const nearSameTs = Number.isFinite(prevTs) && Number.isFinite(curTs) && Math.abs(curTs - prevTs) <= 1500;
+
+        if (sameType && prevMsg === msg) continue;
+
+        // Collapse incremental prefix spam into one final line.
+        if (sameType && nearSameTs) {
+          if (msg.startsWith(prevMsg)) {
+            deduped[deduped.length - 1] = event;
+            continue;
+          }
+          if (prevMsg.startsWith(msg)) {
+            continue;
+          }
+        }
+      }
+
       deduped.push(event);
     }
 

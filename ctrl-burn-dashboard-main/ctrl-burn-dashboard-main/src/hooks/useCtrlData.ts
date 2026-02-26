@@ -71,6 +71,7 @@ export function useCtrlData() {
 
   const cycleSecondsRef = useRef<number>(CYCLE_SECONDS);
   const pollIntervalRef = useRef<number | null>(null);
+  const lastTerminalPushAtRef = useRef<number>(0);
 
   const setFromSnapshot = (snapshot: CtrlSnapshotResponse) => {
     cycleSecondsRef.current = snapshot.cycleSeconds || CYCLE_SECONDS;
@@ -134,9 +135,50 @@ export function useCtrlData() {
         if (parsed.type === "terminal") {
           setData((prev) => ({
             ...prev,
-            terminal: {
-              events: [...prev.terminal.events, parsed.payload].slice(-200),
-            },
+            terminal: (() => {
+              const incoming = parsed.payload;
+              const msg = String(incoming?.message ?? "").trim();
+              if (!msg) return prev.terminal;
+
+              // Drop malformed glyph-only fragments.
+              if (msg.length <= 3 && /^[^\w\d]+$/i.test(msg)) return prev.terminal;
+              if (msg.length <= 6 && /^(?:�|🔥|🟣|🟡|🟢|❌|✅|🧾|📊|\s)+$/u.test(msg)) return prev.terminal;
+
+              const now = Date.now();
+              const events = [...prev.terminal.events];
+              const last = events[events.length - 1];
+
+              if (last) {
+                const lastMsg = String(last.message ?? "").trim();
+                const lastTs = new Date(last.timestamp).getTime();
+                const curTs = new Date(incoming.timestamp).getTime();
+                const sameType = last.type === incoming.type;
+                const nearTs = Number.isFinite(lastTs) && Number.isFinite(curTs) && Math.abs(curTs - lastTs) <= 1500;
+
+                if (sameType && nearTs) {
+                  if (msg.startsWith(lastMsg)) {
+                    events[events.length - 1] = incoming;
+                    lastTerminalPushAtRef.current = now;
+                    return { events: events.slice(-200) };
+                  }
+                  if (lastMsg.startsWith(msg)) {
+                    return prev.terminal;
+                  }
+                }
+
+                if (sameType && msg === lastMsg) {
+                  return prev.terminal;
+                }
+              }
+
+              // Emergency anti-flood guard.
+              if (now - lastTerminalPushAtRef.current < 80) {
+                return prev.terminal;
+              }
+              lastTerminalPushAtRef.current = now;
+
+              return { events: [...events, incoming].slice(-200) };
+            })(),
           }));
         }
       };
