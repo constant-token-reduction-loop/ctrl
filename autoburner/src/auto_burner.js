@@ -84,6 +84,15 @@ function parseSecretKey(secretRaw) {
     return Uint8Array.from(arr);
   }
 
+  // Last-chance recovery for Railway/editor formatting: pull byte list from any text blob.
+  const extracted = secret.match(/\d{1,3}/g);
+  if (extracted && extracted.length === 64) {
+    const arr = extracted.map((n) => Number(n));
+    if (arr.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+      return Uint8Array.from(arr);
+    }
+  }
+
   try {
     const decoded = bs58.decode(secret);
     if (decoded.length !== 64) {

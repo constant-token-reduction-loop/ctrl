@@ -40,14 +40,14 @@ interface MockCycleMetrics {
   burnTokens: number;
 }
 
-const PLUG_POSITION_STORAGE_KEY = "ctrl.dashboard.plugPosition.v1";
-const DEFAULT_PLUG_POSITION = { left: 64, bottom: 136 };
+const PLUG_POSITION_STORAGE_KEY = "ctrl.dashboard.plugPosition.v2";
+const DEFAULT_PLUG_POSITION = { left: 302, bottom: 138 };
 const ENABLE_PLUG_CALIBRATION = false;
 
 const TOP_BURNS_STORAGE_KEY = "ctrl.dashboard.topBurns.v3";
 const TOP_BURNS_LIMIT = 5;
-const TOP_BURNS_POSITION_STORAGE_KEY = "ctrl.dashboard.topBurnsPosition.v1";
-const DEFAULT_TOP_BURNS_POSITION = { left: 560, top: 168 };
+const TOP_BURNS_POSITION_STORAGE_KEY = "ctrl.dashboard.topBurnsPosition.v2";
+const DEFAULT_TOP_BURNS_POSITION = { left: 122, top: 158 };
 const ENABLE_TOP_BURNS_CALIBRATION = false;
 const GITHUB_URL = import.meta.env.VITE_GITHUB_URL ?? "https://github.com";
 const PUMPFUN_URL = import.meta.env.VITE_PUMPFUN_URL ?? "https://pump.fun";
