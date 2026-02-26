@@ -13,6 +13,7 @@ const WORKER_BASE_URL = process.env.CTRL_WORKER_BASE_URL ?? "http://127.0.0.1:87
 const WORKER_EVENTS_URL = process.env.CTRL_WORKER_EVENTS_URL ?? `${WORKER_BASE_URL}/events`;
 const WORKER_STATUS_URL = process.env.CTRL_WORKER_STATUS_URL ?? `${WORKER_BASE_URL}/status`;
 const WORKER_STATUS_POLL_MS = toNumber(process.env.CTRL_WORKER_STATUS_POLL_MS, 3000);
+const INFER_BURN_CONFIRM_FROM_CHAIN = String(process.env.CTRL_INFER_BURN_CONFIRM_FROM_CHAIN ?? "0") === "1";
 const HOLDERS_REFRESH_MS = toNumber(process.env.CTRL_HOLDERS_REFRESH_MS, 120000);
 const CTRL_BRAND = "CTRL - Continuous Token Reduction Loop";
 const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -224,6 +225,13 @@ function buildProfessionalTerminalMessage(level, text, signature) {
       type: "reward",
       message: `\u{1F7E2} [${CTRL_BRAND}] NO REWARDS TO CLAIM.`,
       txUrl: signature ? formatTxUrl(signature) : undefined,
+    };
+  }
+
+  if (upper.includes("NOTHING TO BURN") || upper.includes("TOKEN BALANCE IS ZERO; NOTHING TO BURN")) {
+    return {
+      type: "info",
+      message: `\u{1F7E3} [${CTRL_BRAND}] NOTHING TO BURN THIS CYCLE.`,
     };
   }
 
@@ -1069,7 +1077,7 @@ class CtrlRuntime {
       this.state.ctrl.rewards.walletBalanceUsd = Number((this.state.ctrl.rewards.walletBalanceSol * this.lastPriceUsd).toFixed(2));
     }
 
-    if (Array.isArray(signatures) && signatures.length) {
+    if (INFER_BURN_CONFIRM_FROM_CHAIN && Array.isArray(signatures) && signatures.length) {
       const newestSig = signatures[0]?.signature ?? "";
       const burnTs = signatures[0]?.blockTime ? signatures[0].blockTime * 1000 : nowIso();
       if (this.registerBurnConfirmation(newestSig, burnTs)) {
