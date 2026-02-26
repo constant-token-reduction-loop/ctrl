@@ -44,8 +44,9 @@ function requireEnv(name) {
 function parseSecretKey(secretRaw) {
   const secret = String(secretRaw ?? "").trim();
   if (!secret) throw new Error("Wallet secret is empty");
+  const forcedFormat = String(process.env.WALLET_SECRET_KEY_FORMAT ?? "").trim().toLowerCase();
 
-  if (secret.startsWith("[")) {
+  if (forcedFormat === "json" || secret.startsWith("[")) {
     let arr;
     try {
       arr = JSON.parse(secret);
@@ -120,7 +121,7 @@ const uiState = {
   burned: "-",
   burnValue: "-",
 };
-const LOG_BRAND = "EL MENCHO BURNS";
+const LOG_BRAND = "CTRL - Continuous Token Reduction Loop";
 
 function emitLog(level, text) {
   const line = `${new Date().toLocaleTimeString()} ${text}`;
@@ -762,8 +763,8 @@ async function runOnce(config) {
   const balanceBefore = BigInt(
     await rpcPool.withRetry((conn) => conn.getBalance(keypair.publicKey, "confirmed"), "getBalance")
   );
-  log.section("EL MENCHO BURNS CYCLE");
-  log.info("EL MENCHO BURNS cycle start.");
+  log.section("CTRL CYCLE");
+  log.info("CTRL cycle start.");
   log.info(`CYCLE #${cycleId} PRE-FLIGHT CHECK COMPLETE. BURN ENGINE ARMED.`);
   log.info(`SOL before claim: ${lamportsToSolString(balanceBefore)}`);
   log.info(`Buy route: ${buyRoute}${state.bondingComplete ? " (bonded)" : ""}`);
@@ -1260,8 +1261,8 @@ async function main() {
   const keypair = Keypair.fromSecretKey(parseSecretKey(secret));
   const mint = new PublicKey(mintStr);
   const rpcPool = new RpcPool(rpcUrls, "confirmed");
-  log.section("EL MENCHO BURNS");
-  log.info("EL MENCHO BURNS initialized.");
+  log.section("CTRL - Continuous Token Reduction Loop");
+  log.info("CTRL runtime initialized.");
   log.info(`Wallet: ${keypair.publicKey.toBase58()}`);
   log.info(`Mint: ${mint.toBase58()}`);
   log.info(`RPCs: ${rpcUrls.length} (active ${redactApiKey(rpcPool.currentUrl())})`);
