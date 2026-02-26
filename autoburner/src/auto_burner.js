@@ -33,7 +33,13 @@ const state = {
   claimCooldown: 0,
   claimReplay: null,
   cycleCount: 0,
+  tokenScanBlocked: false,
 };
+
+function isRpcBlockedError(err) {
+  const msg = err?.message ?? String(err ?? "");
+  return /403\s*Forbidden|blocked from this endpoint|Your IP or provider is blocked/i.test(msg);
+}
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -638,10 +644,22 @@ async function burnAllTokens({
       .filter(Boolean);
   };
 
-  const candidates = [
-    ...(await collectByProgram(TOKEN_PROGRAM_ID)),
-    ...(await collectByProgram(TOKEN_2022_PROGRAM_ID)),
-  ];
+  let candidates = [];
+  if (burnAnyToken && !state.tokenScanBlocked) {
+    try {
+      candidates = [
+        ...(await collectByProgram(TOKEN_PROGRAM_ID)),
+        ...(await collectByProgram(TOKEN_2022_PROGRAM_ID)),
+      ];
+    } catch (err) {
+      if (isRpcBlockedError(err)) {
+        state.tokenScanBlocked = true;
+        log.warn("Token account scan endpoint blocked by RPC. Disabling auto-scan and continuing.");
+      } else {
+        throw err;
+      }
+    }
+  }
 
   if (!candidates.length) {
     log.info("No token balance to burn.");
@@ -689,7 +707,11 @@ async function burnAllTokens({
       (conn) => getAccount(conn, targetAta, "confirmed", targetProgramId),
       "getAccount"
     );
-  } catch {
+  } catch (err) {
+    if (isRpcBlockedError(err)) {
+      log.warn("Target burn account query blocked by RPC. Skipping burn this cycle.");
+      return null;
+    }
     log.info("No target token account to burn.");
     return null;
   }
@@ -1151,7 +1173,8 @@ async function runOnce(config) {
   let balanceAfter = BigInt(
     await rpcPool.withRetry((conn) => conn.getBalance(keypair.publicKey, "confirmed"), "getBalance")
   );
-  const claimed = balanceAfter - balanceBefore;
+  const claimedRaw = balanceAfter - balanceBefore;
+  const claimed = claimedRaw > 0n ? claimedRaw : 0n;
   log.info(`SOL after claim: ${lamportsToSolString(balanceAfter)} (claimed ${lamportsToSolString(claimed)})`);
   uiState.sol = lamportsToSolString(balanceAfter);
   uiState.claimed = lamportsToSolString(claimed);
@@ -1205,7 +1228,7 @@ async function runOnce(config) {
       priorityFeeLamports: parseSolToLamports(String(priorityFee)),
     });
   } catch (err) {
-    log.err(`Burn (pre-buy) failed: ${err.message}`);
+    log.warn(`Burn (pre-buy) skipped: ${err.message}`);
   }
 
   let programId = null;
@@ -1310,16 +1333,20 @@ async function runOnce(config) {
     }
   }
 
-  if (solUsd !== null) {
-    const claimedUsd = claimedSol * solUsd;
-    log.info(`Claimed rewards: ${formatSol(claimedSol)} (${formatUsd(claimedUsd)})`);
-    log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(6)} SOL (${claimedUsd.toFixed(2)} USD).`);
-    uiState.claimed = `${formatSol(claimedSol)} (${formatUsd(claimedUsd)})`;
-    uiState.solUsd = `SOL: ${formatUsd(solUsd)}`;
+  if (claimed > 0n) {
+    if (solUsd !== null) {
+      const claimedUsd = claimedSol * solUsd;
+      log.info(`Claimed rewards: ${formatSol(claimedSol)} (${formatUsd(claimedUsd)})`);
+      log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(6)} SOL (${claimedUsd.toFixed(2)} USD).`);
+      uiState.claimed = `${formatSol(claimedSol)} (${formatUsd(claimedUsd)})`;
+      uiState.solUsd = `SOL: ${formatUsd(solUsd)}`;
+    } else {
+      log.info(`Claimed rewards: ${formatSol(claimedSol)} (USD n/a)`);
+      log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(6)} SOL (USD N/A).`);
+      uiState.claimed = `${formatSol(claimedSol)} (USD n/a)`;
+    }
   } else {
-    log.info(`Claimed rewards: ${formatSol(claimedSol)} (USD n/a)`);
-    log.info(`CYCLE #${cycleId} CLAIM EXECUTED +${claimedSol.toFixed(6)} SOL (USD N/A).`);
-    uiState.claimed = `${formatSol(claimedSol)} (USD n/a)`;
+    uiState.claimed = "0 SOL";
   }
   if (tokenUsd !== null) {
     uiState.tokenUsd = `TOKEN: ${formatUsd(tokenUsd)}`;
@@ -1340,12 +1367,12 @@ async function runOnce(config) {
     const maxSpendable = balanceAfter - reserveLamports;
     let spendLamports = maxSpendable;
     if (spendLamports < 0n) spendLamports = 0n;
-    log.info(
-      `CYCLE #${cycleId} BUY ROUTE LOCKED. DEPLOYING ${lamportsToSolString(spendLamports)} SOL.`
-    );
     const minBuyLamports = parseSolToLamports(String(minBuySol));
 
     if (spendLamports >= minBuyLamports && spendLamports > 0n) {
+      log.info(
+        `CYCLE #${cycleId} BUY ROUTE LOCKED. DEPLOYING ${lamportsToSolString(spendLamports)} SOL.`
+      );
       const configuredSplitMax = Math.floor(Number(buySplitMax ?? 0));
       const splitHardCap = Math.max(1, Math.floor(Number(process.env.BUY_SPLIT_HARD_CAP ?? 10000)));
       const splitMax = configuredSplitMax > 0 ? configuredSplitMax : splitHardCap;
@@ -1502,7 +1529,7 @@ async function runOnce(config) {
             emitStatus();
           }
         } catch (err) {
-          log.err(`Burn (step ${step}) failed: ${err.message}`);
+          log.warn(`Burn (step ${step}) skipped: ${err.message}`);
         }
       }
     } else {
@@ -1543,7 +1570,7 @@ async function runOnce(config) {
     }
     emitStatus();
   } catch (err) {
-    log.err(`Burn (post-buy sweep) failed: ${err.message}`);
+    log.warn(`Burn (post-buy sweep) skipped: ${err.message}`);
   }
   } catch (err) {
     log.err(`Cycle failed: ${err.message ?? String(err)}`);

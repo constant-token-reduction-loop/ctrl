@@ -1074,7 +1074,10 @@ class CtrlRuntime {
 
         this.pushTerminal({
           type: "confirm",
-          message: "\u2705 BURN CONFIRMED",
+          message:
+            this.state.ctrl.lastBurn.amountTokens > 0
+              ? `\u2705 BURN CONFIRMED: ${Math.trunc(this.state.ctrl.lastBurn.amountTokens).toLocaleString()} CTRL`
+              : "\u2705 BURN CONFIRMED",
           txUrl: this.state.ctrl.lastBurn.solscanBurnUrl,
         });
       }

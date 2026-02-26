@@ -19,6 +19,8 @@ interface WsTerminalMessage {
 type WsMessage = WsSnapshotMessage | WsPatchMessage | WsTerminalMessage;
 
 const CYCLE_SECONDS = 69;
+const CYCLE_STORAGE_KEY = "ctrl.cycles.persist.v1";
+const CYCLE_FALLBACK_FLOOR = 69;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -72,6 +74,34 @@ export function useCtrlData() {
   const cycleSecondsRef = useRef<number>(CYCLE_SECONDS);
   const pollIntervalRef = useRef<number | null>(null);
   const lastTerminalPushAtRef = useRef<number>(0);
+  const cycleFloorRef = useRef<number>(CYCLE_FALLBACK_FLOOR);
+
+  const applyCyclePersistence = (cyclesTotal: number) => {
+    const incoming = Number.isFinite(cyclesTotal) ? Math.max(0, Math.floor(cyclesTotal)) : 0;
+    const next = Math.max(cycleFloorRef.current, incoming, CYCLE_FALLBACK_FLOOR);
+    cycleFloorRef.current = next;
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(CYCLE_STORAGE_KEY, String(next));
+      } catch {
+        // ignore storage errors
+      }
+    }
+    return next;
+  };
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.localStorage.getItem(CYCLE_STORAGE_KEY);
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) {
+        cycleFloorRef.current = Math.max(CYCLE_FALLBACK_FLOOR, Math.floor(n));
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
 
   const setFromSnapshot = (snapshot: CtrlSnapshotResponse) => {
     cycleSecondsRef.current = snapshot.cycleSeconds || CYCLE_SECONDS;
@@ -79,6 +109,7 @@ export function useCtrlData() {
       setTokenMint(snapshot.tokenMint);
     }
     const next = normalizeCtrl(snapshot.ctrl);
+    next.cycles.total = applyCyclePersistence(next.cycles?.total ?? 0);
     setData(next);
   };
 
@@ -128,7 +159,13 @@ export function useCtrlData() {
         }
 
         if (parsed.type === "patch") {
-          setData((prev) => normalizeCtrl(mergeDeep(prev as Record<string, unknown>, parsed.payload.ctrl as Record<string, unknown>) as CtrlData));
+          setData((prev) => {
+            const next = normalizeCtrl(
+              mergeDeep(prev as Record<string, unknown>, parsed.payload.ctrl as Record<string, unknown>) as CtrlData
+            );
+            next.cycles.total = applyCyclePersistence(next.cycles?.total ?? 0);
+            return next;
+          });
           return;
         }
 
