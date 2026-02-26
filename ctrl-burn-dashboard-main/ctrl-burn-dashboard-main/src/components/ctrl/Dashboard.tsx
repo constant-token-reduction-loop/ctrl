@@ -47,7 +47,6 @@ const TOP_BURNS_STORAGE_KEY = "ctrl.dashboard.topBurns.v3";
 const TOP_BURNS_LIMIT = 5;
 const TOP_BURNS_POSITION_STORAGE_KEY = "ctrl.dashboard.topBurnsPosition.v5";
 const DEFAULT_TOP_BURNS_POSITION = { left: 208, top: 346 };
-const LAYOUT_LOCKED_STORAGE_KEY = "ctrl.dashboard.layoutLocked.v1";
 const GITHUB_URL = import.meta.env.VITE_GITHUB_URL ?? "https://github.com";
 const PUMPFUN_URL = import.meta.env.VITE_PUMPFUN_URL ?? "https://pump.fun";
 const X_URL = import.meta.env.VITE_X_URL ?? "https://x.com";
@@ -459,16 +458,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   const [mockTerminalEvents, setMockTerminalEvents] = useState<TerminalEvent[]>(() => buildMockTimeline(Date.now()));
   const [typedLengths, setTypedLengths] = useState<Record<string, number>>({});
   const [pressedKey, setPressedKey] = useState<string | null>(null);
-  const [layoutLocked, setLayoutLocked] = useState<boolean>(() => {
-    if (typeof window === "undefined") return true;
-    try {
-      const raw = window.localStorage.getItem(LAYOUT_LOCKED_STORAGE_KEY);
-      if (raw === null) return true;
-      return raw !== "0";
-    } catch {
-      return true;
-    }
-  });
+  const layoutLocked = true;
   const [plugPosition, setPlugPosition] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_PLUG_POSITION;
     try {
@@ -800,17 +790,6 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       )}
     >
       <div className="keyboard-title-bar mb-4 px-6 py-3 text-center">
-        <button
-          type="button"
-          className="absolute right-4 top-4 rounded-sm border border-border/70 bg-background/70 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-wider"
-          onClick={() => {
-            const next = !layoutLocked;
-            setLayoutLocked(next);
-            window.localStorage.setItem(LAYOUT_LOCKED_STORAGE_KEY, next ? "1" : "0");
-          }}
-        >
-          {layoutLocked ? "Unlock Layout" : "Lock Layout"}
-        </button>
         <img
           src={ctrlLogoPng}
           alt="CTRL Continuous Token Reduction Loop powered by Grok AI"
