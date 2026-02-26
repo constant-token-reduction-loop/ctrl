@@ -4,9 +4,16 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const children = [];
+const children = new Map();
+let shuttingDown = false;
 
-function start(name, command, args, envOverrides = {}) {
+function startManaged(name, command, args, options = {}) {
+  const {
+    envOverrides = {},
+    restartOnFail = false,
+    restartDelayMs = 5000,
+  } = options;
+
   const child = spawn(command, args, {
     cwd: process.cwd(),
     stdio: "inherit",
@@ -14,66 +21,51 @@ function start(name, command, args, envOverrides = {}) {
     env: { ...process.env, ...envOverrides },
   });
 
+  children.set(name, { child, command, args, options });
+
   child.on("exit", (code, signal) => {
     const why = signal ? `signal ${signal}` : `code ${code}`;
     console.error(`[runner] ${name} exited with ${why}`);
+
+    if (shuttingDown) return;
+
+    if (restartOnFail && code !== 0) {
+      console.error(`[runner] restarting ${name} in ${Math.round(restartDelayMs / 1000)}s...`);
+      setTimeout(() => {
+        if (!shuttingDown) startManaged(name, command, args, options);
+      }, restartDelayMs);
+    }
   });
 
   child.on("error", (err) => {
     console.error(`[runner] ${name} failed: ${err.message}`);
   });
-
-  children.push(child);
-}
-
-function looksLikePlaceholder(value) {
-  const v = String(value ?? "").trim();
-  if (!v) return true;
-  return (
-    /^your[_\-\s]/i.test(v) ||
-    v.includes("YOUR_") ||
-    v.includes("_TOKEN_MINT") ||
-    v.includes("_CONTRACT_ADDRESS")
-  );
-}
-
-function resolveMint(env) {
-  const candidates = [env.MINT, env.TOKEN_MINT_ADDRESS, env.CONTRACT_ADDRESS]
-    .map((v) => String(v ?? "").trim())
-    .filter((v) => v.length > 0 && !looksLikePlaceholder(v));
-  return candidates[0] ?? "";
 }
 
 const runBurnerMode = String(process.env.CTRL_RUN_BURNER ?? "auto").toLowerCase();
-const mint = resolveMint(process.env);
-const shouldRunBurner =
-  !(runBurnerMode === "0" || runBurnerMode === "false" || runBurnerMode === "no");
+const shouldRunBurner = !(runBurnerMode === "0" || runBurnerMode === "false" || runBurnerMode === "no");
 
-const apiEnvOverrides = shouldRunBurner
-  ? {}
-  : {
-      CTRL_WORKER_EVENTS_URL: "",
-      CTRL_WORKER_STATUS_URL: "",
-    };
-
-start("ui", "npm", ["--prefix", "ctrl-burn-dashboard-main/ctrl-burn-dashboard-main", "run", "prod:ui"]);
-start(
-  "api",
-  "npm",
-  ["--prefix", "ctrl-burn-dashboard-main/ctrl-burn-dashboard-main", "run", "prod:api"],
-  apiEnvOverrides
-);
+startManaged("ui", "npm", ["--prefix", "ctrl-burn-dashboard-main/ctrl-burn-dashboard-main", "run", "prod:ui"], {
+  restartOnFail: true,
+  restartDelayMs: 4000,
+});
+startManaged("api", "npm", ["--prefix", "ctrl-burn-dashboard-main/ctrl-burn-dashboard-main", "run", "prod:api"], {
+  restartOnFail: true,
+  restartDelayMs: 4000,
+});
 
 if (shouldRunBurner) {
-  start("burner", "npm", ["--prefix", "autoburner", "run", "start"]);
+  startManaged("burner", "npm", ["--prefix", "autoburner", "run", "start"], {
+    restartOnFail: true,
+    restartDelayMs: 8000,
+  });
 } else {
-  console.warn(
-    "[runner] burner skipped (CTRL_RUN_BURNER=false)."
-  );
+  console.warn("[runner] burner skipped (CTRL_RUN_BURNER=false).");
 }
 
 function shutdown() {
-  for (const child of children) {
+  shuttingDown = true;
+  for (const { child } of children.values()) {
     if (!child.killed) {
       try {
         child.kill("SIGTERM");
