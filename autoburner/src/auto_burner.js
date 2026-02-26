@@ -500,6 +500,73 @@ async function buyViaJupiter({
   return sig;
 }
 
+async function swapViaJupiter({
+  rpcPool,
+  keypair,
+  inputMint,
+  outputMint,
+  inAmountRaw,
+  slippagePct,
+  jupiterApiKey,
+  priorityFeeLamports,
+}) {
+  const slippageBps = Math.max(1, Math.round(slippagePct * 100));
+  const quoteUrl =
+    `https://api.jup.ag/swap/v1/quote?` +
+    `inputMint=${inputMint}&outputMint=${outputMint}` +
+    `&amount=${inAmountRaw.toString()}` +
+    `&slippageBps=${slippageBps}`;
+
+  const quoteResponse = await fetchJson(quoteUrl, {
+    headers: buildJupiterHeaders(jupiterApiKey),
+  });
+  if (!quoteResponse || !quoteResponse.routePlan || quoteResponse.routePlan.length === 0) {
+    throw new Error("Jupiter quote returned no route");
+  }
+
+  const body = {
+    quoteResponse,
+    userPublicKey: keypair.publicKey.toBase58(),
+    wrapAndUnwrapSol: inputMint === SOL_MINT || outputMint === SOL_MINT,
+    dynamicComputeUnitLimit: true,
+    dynamicSlippage: true,
+  };
+
+  if (priorityFeeLamports > 0n) {
+    body.prioritizationFeeLamports = {
+      priorityLevelWithMaxLamports: {
+        maxLamports: Number(priorityFeeLamports),
+        priorityLevel: "veryHigh",
+      },
+    };
+  }
+
+  const swapResponse = await fetchJson("https://api.jup.ag/swap/v1/swap", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...buildJupiterHeaders(jupiterApiKey),
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!swapResponse?.swapTransaction) {
+    throw new Error("Jupiter swap returned no transaction");
+  }
+
+  const tx = VersionedTransaction.deserialize(
+    Buffer.from(swapResponse.swapTransaction, "base64")
+  );
+  tx.sign([keypair]);
+
+  const sig = await rpcPool.withRetry(
+    (conn) => conn.sendTransaction(tx, { maxRetries: 3 }),
+    "sendTransaction"
+  );
+  await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
+  return sig;
+}
+
 async function getTokenProgramId(rpcPool, mint) {
   const info = await rpcPool.withRetry(
     (conn) => conn.getAccountInfo(mint, "confirmed"),
@@ -518,36 +585,130 @@ async function getMintInfo(rpcPool, mint, programId) {
   );
 }
 
-async function burnAllTokens({ rpcPool, payer, mint, pricing }) {
-  const programId = await getTokenProgramId(rpcPool, mint);
-  const ata = await getAssociatedTokenAddress(mint, payer.publicKey, false, programId);
-  let account;
+async function burnAllTokens({
+  rpcPool,
+  payer,
+  mint,
+  pricing,
+  burnAnyToken = true,
+  jupiterApiKey = "",
+  slippagePct = 1,
+  priorityFeeLamports = 0n,
+}) {
+  const owner = payer.publicKey.toBase58();
+  const targetMint = mint?.toBase58?.() ?? "";
+
+  const collectByProgram = async (programId) => {
+    const rows = await rpcPool.withRetry(
+      (conn) =>
+        conn.getTokenAccountsByOwner(
+          payer.publicKey,
+          { programId },
+          { encoding: "jsonParsed", commitment: "confirmed" }
+        ),
+      "getTokenAccountsByOwner"
+    );
+    const list = Array.isArray(rows?.value) ? rows.value : [];
+    return list
+      .map((row) => {
+        const parsed = row?.account?.data?.parsed?.info;
+        const mintAddr = String(parsed?.mint ?? "");
+        const amountRaw = String(parsed?.tokenAmount?.amount ?? "0");
+        const decimals = Number(parsed?.tokenAmount?.decimals ?? 0);
+        const ownerAddr = String(parsed?.owner ?? "");
+        if (!mintAddr || ownerAddr !== owner) return null;
+        let amount;
+        try {
+          amount = BigInt(amountRaw);
+        } catch {
+          amount = 0n;
+        }
+        if (amount <= 0n) return null;
+        if (!burnAnyToken && mintAddr !== targetMint) return null;
+        if (mintAddr === SOL_MINT) return null;
+        return {
+          tokenAccount: new PublicKey(String(row.pubkey)),
+          mint: new PublicKey(mintAddr),
+          mintStr: mintAddr,
+          amount,
+          decimals,
+          programId,
+        };
+      })
+      .filter(Boolean);
+  };
+
+  const candidates = [
+    ...(await collectByProgram(TOKEN_PROGRAM_ID)),
+    ...(await collectByProgram(TOKEN_2022_PROGRAM_ID)),
+  ];
+
+  if (!candidates.length) {
+    log.info("No token balance to burn.");
+    return null;
+  }
+
+  let totalBurnedTarget = 0;
+  let lastSig = "";
+
+  for (const c of candidates) {
+    if (c.mintStr === targetMint) continue;
+    if (!burnAnyToken) continue;
+    const tokenUi = Number(c.amount) / 10 ** c.decimals;
+    const shortMint = `${c.mintStr.slice(0, 4)}...${c.mintStr.slice(-4)}`;
+    log.info(`DEPOSIT DETECTED: ${tokenUi.toLocaleString()} TOKENS (${shortMint}).`);
+
+    if (!jupiterApiKey) {
+      log.warn(`No JUPITER_API_KEY; cannot convert deposit ${shortMint} to target mint.`);
+      continue;
+    }
+    try {
+      const swapSig = await swapViaJupiter({
+        rpcPool,
+        keypair: payer,
+        inputMint: c.mintStr,
+        outputMint: targetMint,
+        inAmountRaw: c.amount,
+        slippagePct,
+        jupiterApiKey,
+        priorityFeeLamports,
+      });
+      log.ok(`DEPOSIT CONVERTED TO TARGET: ${tokenUi.toLocaleString()} (${shortMint}).`);
+      log.tx("Deposit Swap Tx", swapSig);
+    } catch (err) {
+      log.warn(`Deposit convert failed (${shortMint}): ${err?.message ?? String(err)}`);
+    }
+  }
+
+  // Burn target mint only (after conversions, if any).
+  const targetProgramId = await getTokenProgramId(rpcPool, mint);
+  const targetAta = await getAssociatedTokenAddress(mint, payer.publicKey, false, targetProgramId);
+  let targetAccount;
   try {
-    account = await rpcPool.withRetry(
-      (conn) => getAccount(conn, ata, "confirmed", programId),
+    targetAccount = await rpcPool.withRetry(
+      (conn) => getAccount(conn, targetAta, "confirmed", targetProgramId),
       "getAccount"
     );
   } catch {
-    log.info("No token account to burn.");
+    log.info("No target token account to burn.");
     return null;
   }
 
-  if (account.amount === 0n) {
-    log.info("Token balance is zero; nothing to burn.");
+  if (targetAccount.amount === 0n) {
+    log.info("Target token balance is zero; nothing to burn.");
     return null;
   }
 
-  const mintInfo = await getMintInfo(rpcPool, mint, programId);
+  const targetMintInfo = await getMintInfo(rpcPool, mint, targetProgramId);
   const ix = createBurnCheckedInstruction(
-    ata,
+    targetAta,
     mint,
     payer.publicKey,
-    account.amount,
-    mintInfo.decimals,
+    targetAccount.amount,
+    targetMintInfo.decimals,
     [],
-    programId
+    targetProgramId
   );
-
   const latest = await rpcPool.withRetry(
     (conn) => conn.getLatestBlockhash("confirmed"),
     "getLatestBlockhash"
@@ -555,21 +716,64 @@ async function burnAllTokens({ rpcPool, payer, mint, pricing }) {
   const tx = new Transaction().add(ix);
   tx.feePayer = payer.publicKey;
   tx.recentBlockhash = latest.blockhash;
-
   const sig = await rpcPool.withRetry(
     (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
     "sendTransaction"
   );
   await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
-  const burnedTokens = Number(account.amount) / 10 ** mintInfo.decimals;
-  log.burn(`Burned ${burnedTokens.toLocaleString()} tokens.`);
+  totalBurnedTarget = Number(targetAccount.amount) / 10 ** targetMintInfo.decimals;
+  log.burn(`Burned ${totalBurnedTarget.toLocaleString()} tokens.`);
   if (pricing?.tokenUsd && pricing?.solUsd) {
-    const burnedUsd = burnedTokens * pricing.tokenUsd;
+    const burnedUsd = totalBurnedTarget * pricing.tokenUsd;
     const burnedSol = burnedUsd / pricing.solUsd;
     log.burn(`Burn value: ${formatSol(burnedSol)} (${formatUsd(burnedUsd)}).`);
   }
   log.tx("Burn Tx", sig);
-  return { sig, burnedTokens };
+  lastSig = sig;
+
+  /*
+  for (const c of candidates) {
+    const ix = createBurnCheckedInstruction(
+      c.tokenAccount,
+      c.mint,
+      payer.publicKey,
+      c.amount,
+      c.decimals,
+      [],
+      c.programId
+    );
+    const latest = await rpcPool.withRetry(
+      (conn) => conn.getLatestBlockhash("confirmed"),
+      "getLatestBlockhash"
+    );
+    const tx = new Transaction().add(ix);
+    tx.feePayer = payer.publicKey;
+    tx.recentBlockhash = latest.blockhash;
+
+    const sig = await rpcPool.withRetry(
+      (conn) => conn.sendTransaction(tx, [payer], { maxRetries: 3 }),
+      "sendTransaction"
+    );
+    await rpcPool.withRetry((conn) => conn.confirmTransaction(sig, "confirmed"), "confirmTransaction");
+
+    const burnedTokens = Number(c.amount) / 10 ** c.decimals;
+    const shortMint = `${c.mintStr.slice(0, 4)}...${c.mintStr.slice(-4)}`;
+    log.burn(`Burned ${burnedTokens.toLocaleString()} tokens (${shortMint}).`);
+    log.tx("Burn Tx", sig);
+    lastSig = sig;
+
+    if (c.mintStr === targetMint) {
+      totalBurnedTarget += burnedTokens;
+      if (pricing?.tokenUsd && pricing?.solUsd) {
+        const burnedUsd = burnedTokens * pricing.tokenUsd;
+        const burnedSol = burnedUsd / pricing.solUsd;
+        log.burn(`Burn value: ${formatSol(burnedSol)} (${formatUsd(burnedUsd)}).`);
+      }
+    }
+  }
+  */
+
+  return { sig: lastSig, burnedTokens: totalBurnedTarget };
 }
 
 async function hasTokenAccount(rpcPool, owner, mint, programId) {
@@ -828,6 +1032,7 @@ async function runOnce(config) {
     jupiterApiKey,
     buySplitMax,
     buySplitMinUsd,
+    burnAnyToken,
   } = config;
   state.cycleCount += 1;
   const cycleId = state.cycleCount;
@@ -990,7 +1195,7 @@ async function runOnce(config) {
 
   // Burn any existing tokens before attempting a buy
   try {
-    await burnAllTokens({ rpcPool, payer: keypair, mint });
+    await burnAllTokens({ rpcPool, payer: keypair, mint, burnAnyToken });
   } catch (err) {
     log.err(`Burn (pre-buy) failed: ${err.message}`);
   }
@@ -1269,6 +1474,7 @@ async function runOnce(config) {
             payer: keypair,
             mint,
             pricing: { tokenUsd, solUsd },
+            burnAnyToken,
           });
           if (burnResult?.burnedTokens !== undefined) {
             uiState.burned = `${burnResult.burnedTokens.toLocaleString()} tokens`;
@@ -1309,6 +1515,7 @@ async function runOnce(config) {
       payer: keypair,
       mint,
       pricing: { tokenUsd, solUsd },
+      burnAnyToken,
     });
     if (burnResult?.burnedTokens !== undefined && burnResult.burnedTokens > 0) {
       uiState.burned = `${burnResult.burnedTokens.toLocaleString()} tokens`;
@@ -1379,6 +1586,7 @@ async function main() {
   const quoteSolLamports = Number(process.env.PRICE_QUOTE_SOL_LAMPORTS ?? "100000000");
   const buySplitMax = Number(process.env.BUY_SPLIT_MAX ?? "30");
   const buySplitMinUsd = Number(process.env.BUY_SPLIT_MIN_USD ?? "0.20");
+  const burnAnyToken = String(process.env.AUTO_BURN_ANY_TOKEN ?? "1") !== "0";
   const birdeyeApiKey = process.env.BIRDEYE_API_KEY ?? "";
   const jupiterApiKey = process.env.JUPITER_API_KEY ?? "";
 
@@ -1434,6 +1642,7 @@ async function main() {
     quoteSolLamports,
     buySplitMax,
     buySplitMinUsd,
+    burnAnyToken,
     birdeyeApiKey,
     jupiterApiKey,
   });
@@ -1475,6 +1684,7 @@ async function main() {
         quoteSolLamports,
         buySplitMax,
         buySplitMinUsd,
+        burnAnyToken,
         birdeyeApiKey,
         jupiterApiKey,
       });
