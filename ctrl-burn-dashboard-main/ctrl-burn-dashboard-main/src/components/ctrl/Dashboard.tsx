@@ -40,13 +40,14 @@ interface MockCycleMetrics {
   burnTokens: number;
 }
 
+const PLUG_POSITION_STORAGE_KEY = "ctrl.dashboard.plugPosition.v5";
 const DEFAULT_PLUG_POSITION = { left: 520, bottom: 94 };
-const ENABLE_PLUG_CALIBRATION = false;
 
 const TOP_BURNS_STORAGE_KEY = "ctrl.dashboard.topBurns.v3";
 const TOP_BURNS_LIMIT = 5;
+const TOP_BURNS_POSITION_STORAGE_KEY = "ctrl.dashboard.topBurnsPosition.v5";
 const DEFAULT_TOP_BURNS_POSITION = { left: 208, top: 346 };
-const ENABLE_TOP_BURNS_CALIBRATION = false;
+const LAYOUT_LOCKED_STORAGE_KEY = "ctrl.dashboard.layoutLocked.v1";
 const GITHUB_URL = import.meta.env.VITE_GITHUB_URL ?? "https://github.com";
 const PUMPFUN_URL = import.meta.env.VITE_PUMPFUN_URL ?? "https://pump.fun";
 const X_URL = import.meta.env.VITE_X_URL ?? "https://x.com";
@@ -458,7 +459,28 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   const [mockTerminalEvents, setMockTerminalEvents] = useState<TerminalEvent[]>(() => buildMockTimeline(Date.now()));
   const [typedLengths, setTypedLengths] = useState<Record<string, number>>({});
   const [pressedKey, setPressedKey] = useState<string | null>(null);
-  const [plugPosition, setPlugPosition] = useState(DEFAULT_PLUG_POSITION);
+  const [layoutLocked, setLayoutLocked] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      const raw = window.localStorage.getItem(LAYOUT_LOCKED_STORAGE_KEY);
+      if (raw === null) return true;
+      return raw !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [plugPosition, setPlugPosition] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_PLUG_POSITION;
+    try {
+      const raw = window.localStorage.getItem(PLUG_POSITION_STORAGE_KEY);
+      if (!raw) return DEFAULT_PLUG_POSITION;
+      const parsed = JSON.parse(raw) as { left?: number; bottom?: number };
+      if (typeof parsed.left !== "number" || typeof parsed.bottom !== "number") return DEFAULT_PLUG_POSITION;
+      return { left: parsed.left, bottom: parsed.bottom };
+    } catch {
+      return DEFAULT_PLUG_POSITION;
+    }
+  });
 
   const dragStartRef = useRef<{ x: number; y: number; left: number; bottom: number } | null>(null);
   const topBurnsDragStartRef = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
@@ -470,7 +492,18 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   const nextTypeDelayRef = useRef<number>(TYPING_SPEED_MS);
   const lastCtrlPressCycleRef = useRef<number>(-1);
 
-  const [topBurnsPosition, setTopBurnsPosition] = useState(DEFAULT_TOP_BURNS_POSITION);
+  const [topBurnsPosition, setTopBurnsPosition] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_TOP_BURNS_POSITION;
+    try {
+      const raw = window.localStorage.getItem(TOP_BURNS_POSITION_STORAGE_KEY);
+      if (!raw) return DEFAULT_TOP_BURNS_POSITION;
+      const parsed = JSON.parse(raw) as { left?: number; top?: number };
+      if (typeof parsed.left !== "number" || typeof parsed.top !== "number") return DEFAULT_TOP_BURNS_POSITION;
+      return { left: parsed.left, top: parsed.top };
+    } catch {
+      return DEFAULT_TOP_BURNS_POSITION;
+    }
+  });
 
   const [topBurns, setTopBurns] = useState<TopBurn[]>(() => {
     if (typeof window === "undefined") return [];
@@ -527,7 +560,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
   }, []);
 
   useEffect(() => {
-    if (!ENABLE_PLUG_CALIBRATION) return;
+    if (layoutLocked) return;
 
     const onMove = (e: MouseEvent) => {
       const drag = dragStartRef.current;
@@ -539,6 +572,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       };
 
       setPlugPosition(next);
+      window.localStorage.setItem(PLUG_POSITION_STORAGE_KEY, JSON.stringify(next));
     };
 
     const onUp = () => {
@@ -551,10 +585,10 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, []);
+  }, [layoutLocked]);
 
   useEffect(() => {
-    if (!ENABLE_TOP_BURNS_CALIBRATION) return;
+    if (layoutLocked) return;
 
     const onMove = (e: MouseEvent) => {
       const drag = topBurnsDragStartRef.current;
@@ -566,6 +600,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       };
 
       setTopBurnsPosition(next);
+      window.localStorage.setItem(TOP_BURNS_POSITION_STORAGE_KEY, JSON.stringify(next));
     };
 
     const onUp = () => {
@@ -578,7 +613,7 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };
-  }, []);
+  }, [layoutLocked]);
 
   const combinedEventsChronological = useMemo(() => {
     const source = data.terminal.events.length > 0 ? data.terminal.events : mockTerminalEvents;
@@ -765,6 +800,17 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
       )}
     >
       <div className="keyboard-title-bar mb-4 px-6 py-3 text-center">
+        <button
+          type="button"
+          className="absolute right-4 top-4 rounded-sm border border-border/70 bg-background/70 px-2 py-1 font-mono text-[10px] font-bold uppercase tracking-wider"
+          onClick={() => {
+            const next = !layoutLocked;
+            setLayoutLocked(next);
+            window.localStorage.setItem(LAYOUT_LOCKED_STORAGE_KEY, next ? "1" : "0");
+          }}
+        >
+          {layoutLocked ? "Unlock Layout" : "Lock Layout"}
+        </button>
         <img
           src={ctrlLogoPng}
           alt="CTRL Continuous Token Reduction Loop powered by Grok AI"
@@ -866,11 +912,11 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
           id="ctrl-top-burns"
           className={cn(
             "hidden lg:block absolute w-[303px]",
-            ENABLE_TOP_BURNS_CALIBRATION && "cursor-grab active:cursor-grabbing"
+            !layoutLocked && "cursor-grab active:cursor-grabbing"
           )}
           style={{ left: `${topBurnsPosition.left}px`, top: `${topBurnsPosition.top}px` }}
           onMouseDown={(e) => {
-            if (!ENABLE_TOP_BURNS_CALIBRATION) return;
+            if (layoutLocked) return;
             const target = e.target as HTMLElement | null;
             if (target?.closest("a")) return;
             e.preventDefault();
@@ -984,10 +1030,10 @@ export function Dashboard({ streamMode = false, data, isGlitching, isCtrlPressed
         alt=""
         aria-hidden="true"
         draggable={false}
-        className={cn("ctrl-plug-image", ENABLE_PLUG_CALIBRATION && "ctrl-plug-draggable")}
+        className={cn("ctrl-plug-image", !layoutLocked && "ctrl-plug-draggable")}
         style={{ left: `${plugPosition.left}px`, bottom: `${plugPosition.bottom}px` }}
         onMouseDown={(e) => {
-          if (!ENABLE_PLUG_CALIBRATION) return;
+          if (layoutLocked) return;
           e.preventDefault();
           dragStartRef.current = {
             x: e.clientX,

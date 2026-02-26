@@ -41,6 +41,31 @@ function requireEnv(name) {
   return v;
 }
 
+function looksLikePlaceholder(value) {
+  const v = String(value ?? "").trim();
+  if (!v) return true;
+  return (
+    /^your[_\-\s]/i.test(v) ||
+    v.includes("YOUR_") ||
+    v.includes("_TOKEN_MINT") ||
+    v.includes("_CONTRACT_ADDRESS")
+  );
+}
+
+function resolveMintEnv(env) {
+  const candidates = [env.MINT, env.TOKEN_MINT_ADDRESS, env.CONTRACT_ADDRESS]
+    .map((v) => String(v ?? "").trim())
+    .filter((v) => v.length > 0 && !looksLikePlaceholder(v));
+
+  if (!candidates.length) {
+    throw new Error(
+      "Missing token mint. Set MINT (or TOKEN_MINT_ADDRESS) to a real base58 mint address."
+    );
+  }
+
+  return candidates[0];
+}
+
 function parseSecretKey(secretRaw) {
   const jsonOverride = String(process.env.WALLET_SECRET_KEY_JSON ?? "").trim();
   let secret = String(jsonOverride || secretRaw || "").trim();
@@ -1282,7 +1307,7 @@ async function main() {
       "Missing wallet secret. Set WALLET_SECRET_KEY_BASE58 (base58 or [..] JSON array), or WALLET_SECRET_KEY_JSON."
     );
   }
-  const mintStr = requireEnv("MINT");
+  const mintStr = resolveMintEnv(process.env);
 
   const slippage = Number(process.env.SLIPPAGE ?? "1");
   const priorityFee = Number(process.env.PRIORITY_FEE ?? "0.0001");
@@ -1313,7 +1338,14 @@ async function main() {
   const jupiterApiKey = process.env.JUPITER_API_KEY ?? "";
 
   const keypair = Keypair.fromSecretKey(parseSecretKey(secret));
-  const mint = new PublicKey(mintStr);
+  let mint;
+  try {
+    mint = new PublicKey(mintStr);
+  } catch {
+    throw new Error(
+      "Invalid token mint address. Check MINT/TOKEN_MINT_ADDRESS/CONTRACT_ADDRESS in env (must be valid base58)."
+    );
+  }
   const rpcPool = new RpcPool(rpcUrls, "confirmed");
   log.section("CTRL - Continuous Token Reduction Loop");
   log.info("CTRL runtime initialized.");
