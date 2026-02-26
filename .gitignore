@@ -1,0 +1,15 @@
+# Secrets / local env
+.env
+.env.local
+.env.*.local
+
+# Node/runtime
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+
+# Logs / runtime state
+*.log
+.ctrl-runtime-state.json
+constant-token-reduction-loop-profile/

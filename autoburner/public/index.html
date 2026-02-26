@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EL MENCHO BURNS</title>
+  <style>
+    @import url("https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap");
+    :root {
+      --bg: #0b0a08;
+      --panel: #0f0b09;
+      --border: #2a1a12;
+      --accent: #ff6a00;
+      --accent2: #ffb000;
+      --text: #f8efe9;
+      --info: #ffb000;
+      --ok: #45f39a;
+      --warn: #ffce54;
+      --err: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      font-family: "Space Mono", "JetBrains Mono", Consolas, monospace;
+      background:
+        radial-gradient(1000px 500px at 15% -10%, #3a1f12 0%, #120b08 45%, #090706 100%),
+        linear-gradient(160deg, #120b08 0%, #0b0a08 100%);
+      color: var(--text);
+      height: 100%;
+      overflow: hidden;
+    }
+    .wrap {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 12px 14px 16px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: linear-gradient(90deg, #1a0f0b, #0f0b09);
+      box-shadow: 0 12px 30px rgba(0,0,0,.4);
+    }
+    .title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--accent2);
+    }
+    .status {
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--accent);
+      background: #120b08;
+    }
+    .controls {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+    }
+    .btn {
+      border: 1px solid var(--border);
+      background: #1a0f0b;
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+    }
+    .terminal {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: var(--panel);
+      box-shadow: 0 20px 50px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,106,0,.08);
+      padding: 14px 14px 18px;
+      min-height: 520px;
+      max-height: 720px;
+      overflow: auto;
+      font-size: 16px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      scrollbar-width: none;
+    }
+    .terminal::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+    .terminal::before {
+      content: "o  EL MENCHO BURNS LIVE";
+      display: block;
+      margin-bottom: 10px;
+      font-size: 12px;
+      letter-spacing: 0.2em;
+      color: var(--accent2);
+    }
+    .log-line { color: var(--text); }
+    .info { color: var(--info); }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .err { color: var(--err); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="title">EL MENCHO BURNS</div>
+      <div class="status" id="status">Connecting...</div>
+    </div>
+    <div class="terminal" id="log"></div>
+  </div>
+  <script>
+    const logEl = document.getElementById("log");
+    const statusEl = document.getElementById("status");
+
+    function appendLog(line, level) {
+      const row = document.createElement("div");
+      row.className = `log-line ${level || "info"}`;
+      row.textContent = line;
+      logEl.appendChild(row);
+      requestAnimationFrame(() => {
+        logEl.scrollTop = logEl.scrollHeight;
+      });
+    }
+
+    const evt = new EventSource("/events");
+    evt.onopen = () => { statusEl.textContent = "Connected"; };
+    evt.onerror = () => { statusEl.textContent = "Disconnected"; };
+    evt.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "log") {
+        appendLog(msg.text, msg.level);
+      }
+    };
+  </script>
+</body>
+</html>
+
