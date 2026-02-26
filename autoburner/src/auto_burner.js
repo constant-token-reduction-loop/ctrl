@@ -56,12 +56,28 @@ function parseSecretKey(secretRaw) {
   }
 
   const compact = secret.replace(/\s+/g, "");
+  const extractedBytes = secret
+    .split(/[^0-9]+/g)
+    .filter(Boolean)
+    .map((n) => Number(n));
+  const extractedLooksValid =
+    extractedBytes.length === 64 &&
+    extractedBytes.every((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+
+  // If user forces JSON mode, trust byte extraction first (Railway formatting safe).
+  if (forcedFormat === "json" && extractedLooksValid) {
+    return Uint8Array.from(extractedBytes);
+  }
+
   const looksLikeJsonArray =
     compact.startsWith("[") ||
     /^\d+(,\d+)+$/.test(compact) ||
     (/^\[?[\d,\s]+\]?$/.test(secret) && secret.includes(","));
 
   if (forcedFormat === "json" || looksLikeJsonArray) {
+    if (extractedLooksValid) {
+      return Uint8Array.from(extractedBytes);
+    }
     let arr;
     try {
       const normalized = compact.startsWith("[") ? compact : `[${compact}]`;
@@ -87,12 +103,8 @@ function parseSecretKey(secretRaw) {
   }
 
   // Last-chance recovery for Railway/editor formatting: pull byte list from any text blob.
-  const extracted = secret.match(/\d{1,3}/g);
-  if (extracted && extracted.length === 64) {
-    const arr = extracted.map((n) => Number(n));
-    if (arr.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
-      return Uint8Array.from(arr);
-    }
+  if (extractedLooksValid) {
+    return Uint8Array.from(extractedBytes);
   }
 
   try {
@@ -1260,7 +1272,16 @@ async function main() {
   });
 
   const rpcUrls = parseRpcUrls(process.env);
-  const secret = requireEnv("WALLET_SECRET_KEY_BASE58");
+  const secret =
+    process.env.WALLET_SECRET_KEY_BASE58 ??
+    process.env.WALLET_SECRET_KEY_JSON ??
+    process.env.WALLET_SECRET_KEY ??
+    "";
+  if (!String(secret).trim()) {
+    throw new Error(
+      "Missing wallet secret. Set WALLET_SECRET_KEY_BASE58 (base58 or [..] JSON array), or WALLET_SECRET_KEY_JSON."
+    );
+  }
   const mintStr = requireEnv("MINT");
 
   const slippage = Number(process.env.SLIPPAGE ?? "1");
